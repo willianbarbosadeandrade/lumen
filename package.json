@@ -2,7 +2,7 @@
   "name": "lumen",
   "productName": "Lumen",
   "version": "0.2.0",
-  "description": "Copiloto de IA para macOS: escuta a conversa, entende a tela e age sobre o texto selecionado.",
+  "description": "Copiloto de IA para desktop (macOS, Windows e Linux): escuta a conversa, entende a tela e age sobre o texto selecionado.",
   "main": "./out/main/index.js",
   "author": {
     "name": "Willian Barbosa",

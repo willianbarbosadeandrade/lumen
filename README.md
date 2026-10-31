@@ -1,87 +1,113 @@
 # Lumen
 
-Copiloto de IA para macOS. Uma barra flutuante fica sobre qualquer app, ouve a conversa (microfone + áudio do sistema), entende a tela quando você pede e age sobre o texto selecionado em outros apps.
+**Copiloto de IA para desktop.** É uma barra flutuante que fica sobre qualquer app: ouve a conversa, lê a tela quando você pede, sugere o que responder, age sobre o texto selecionado e guarda cada sessão com a transcrição revisada e um resumo.
 
-## Gerar o app (.dmg) no seu Mac
+`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.2.0
 
-Requer Node 20+ e Xcode Command Line Tools (`xcode-select --install`).
+<!-- TODO: adicionar um GIF da barra em uso (docs/demo.gif) -->
+
+---
+
+## Por que existe
+
+Copilotos de IA para reuniões costumam ser pagos, fechados e passar seus dados por um servidor da empresa. O Lumen foi escrito para fazer o mesmo trabalho com três regras:
+
+- **Seus dados ficam no seu computador.** As sessões ficam em JSON local, as chaves de API ficam criptografadas no cofre do sistema e não existe backend nem telemetria.
+- **Custo zero possível.** Funciona com Gemini e Groq nos planos grátis, ou 100% local com o Ollama.
+- **Falhar de forma visível e recuperável.** Tem limites de tempo, novas tentativas automáticas, provedor reserva e mensagens de erro claras.
+
+Projeto autoral, escrito do zero a partir de uma lista de funcionalidades observadas em copilotos existentes (abordagem *clean room*), sem reaproveitar código, imagens nem textos de terceiros.
+
+## O que ele faz
+
+| Recurso | Como funciona |
+|---|---|
+| **Barra flutuante** | Transparente, sempre no topo, visível em todas as áreas de trabalho e sobre apps em tela cheia |
+| **Perguntar sobre a tela** | Captura a tela onde está o cursor (escondendo a própria barra) e responde em streaming, com Markdown e blocos de código |
+| **"O que eu digo agora?"** | Sugere uma resposta curta para falar em voz alta, com base no que acabou de ser dito |
+| **Gravação com transcrição** | Separa microfone ("Você") e áudio do sistema ("Outros"); ao parar, refaz a transcrição a partir do áudio completo, identificando quem falou |
+| **Ações sobre texto selecionado** | Explicar, resumir, reescrever, corrigir, traduzir e responder em qualquer app, com opção de colar o resultado no lugar |
+| **Modos com documentos** | Reuniões, vendas, atendimento e estudo, cada um com instruções próprias e PDFs ou CSVs de contexto |
+| **Histórico** | Resumo com decisões e próximos passos, transcrição com nomes editáveis e exportação em Markdown |
+
+## Arquitetura e segurança
+
+```
+┌──────────────── renderer (React) ────────────────┐
+│ desenha a interface e captura o áudio (APIs Web) │
+└──────────────────────┬───────────────────────────┘
+                       │  window.lumen (API tipada, contextBridge)
+┌──────────────────────▼───────────────────────────┐
+│ preload: ponte IPC restrita                      │
+└──────────────────────┬───────────────────────────┘
+┌──────────────────────▼───────────────────────────┐
+│ main (Node.js): chaves, disco, rede, captura,    │
+│ chamadas às IAs, transcrição, atalhos globais    │
+└──────────────────────────────────────────────────┘
+```
+
+- A interface **não acessa rede, disco nem sistema**: tudo passa pela ponte do preload até o processo principal.
+- A **Content-Security-Policy** restringe scripts e conexões da interface à própria origem.
+- **Chaves de API** são criptografadas com `safeStorage` (Keychain no Mac, DPAPI no Windows, libsecret no Linux).
+- A **gravação é atômica** (arquivo temporário e depois renomear), para não corromper dados se o app cair.
+- **O que sai do computador:** só o necessário e só para o provedor escolhido pelo usuário. Com o Ollama, as respostas não saem da máquina.
+
+## Decisões técnicas que valem a leitura
+
+- **Dupla transcrição.** A primeira é rápida e ao vivo (Whisper turbo), em trechos cortados por pausa de fala, para alimentar as sugestões. A segunda é fiel e feita a partir do áudio completo, com o Gemini devolvendo JSON estruturado com quem falou e quando. Se a final falhar, a ao vivo fica como reserva.
+- **Tolerância a falhas nos provedores.** Detecta modelo aposentado (404) e troca para o mais novo, faz até 3 tentativas em 429/5xx e, se o provedor principal continuar fora, usa outro com chave configurada.
+- **Ollama pela API nativa** (`/api/chat`), porque só ela aceita `num_ctx`, `keep_alive` e `think`. Há também um orçamento de contexto calculado por memória disponível.
+- **Filtro de eco e de alucinação.** Remove falas do microfone que repetem o áudio dos alto-falantes e frases típicas que o Whisper inventa em silêncio.
+- **Sem módulos nativos.** Não usa SQLite nem node-gyp, então o build é o mesmo nos três sistemas.
+
+## Provedores de IA
+
+| Provedor | Custo | Lê a tela | Uso |
+|---|---|---|---|
+| Gemini | Grátis com limites | Sim | Respostas e transcrição final com identificação de vozes |
+| Groq | Grátis com limites | Não | Transcrição ao vivo e reserva rápida |
+| Ollama | Local | Com modelos de visão | Uso privado e offline |
+| Claude / OpenAI | Pago (chave própria) | Sim | Máxima qualidade |
+
+## Rodar e gerar o app
+
+Requer Node 20+.
 
 ```bash
-cd ~/Projetos/lumen
 npm install
-npm run dist          # gera dist/Lumen-0.1.0-arm64.dmg e o .app em dist/mac-arm64/
+npm run dev          # desenvolvimento com recarga automática
+npm run typecheck    # checagem de tipos (roda antes de todo build)
+npm run app          # macOS: build, .dmg e instala em /Applications
+npm run dist:win     # Windows: instalador NSIS
+npm run dist:linux   # Linux: AppImage + .deb
 ```
 
-Para testar sem empacotar: `npm run dev`. Nesse modo o macOS atribui as permissões ao "Electron" e não ao Lumen, então para testar microfone, tela e acessibilidade use o app gerado por `npm run dist`.
+No macOS, o build cria uma única vez um certificado autoassinado "Lumen Dev" no Keychain. Assim as permissões de microfone, tela e acessibilidade não se perdem a cada rebuild.
 
-### Assinatura
+### Atalhos
 
-- Por padrão o build usa **assinatura ad-hoc** (`identity: "-"` no `electron-builder.yml`). Funciona no seu Mac, mas cada rebuild muda a assinatura e o macOS pode pedir as permissões de novo. Se uma permissão "sumir", remova o Lumen da lista em Ajustes do Sistema e adicione de novo.
-- Para distribuir, use seu certificado: `CSC_NAME="Developer ID Application: Seu Nome (TEAMID)" npm run dist`. Para notarizar, adicione `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` e `APPLE_TEAM_ID` e ative `notarize: true` no `electron-builder.yml`.
-
-
-## Instaladores (v0.2.0)
-
-| Sistema | Arquivo | Como instalar |
+| Ação | macOS | Windows / Linux |
 |---|---|---|
-| Windows 10/11 (64 bits) | `Lumen-Setup-0.2.0.exe` | Dê dois cliques. Instala sem pedir senha de administrador, cria atalho na Área de Trabalho e no Menu Iniciar e abre o Lumen. |
-| Linux (qualquer distro) | `Lumen-0.2.0-x86_64.AppImage` | `chmod +x Lumen-0.2.0-x86_64.AppImage` e dois cliques. Não precisa instalar. |
-| Ubuntu / Debian | `Lumen-0.2.0-amd64.deb` | `sudo apt install ./Lumen-0.2.0-amd64.deb` (já instala o xdotool para o texto selecionado). |
-| macOS | `npm run app` no Mac | Gera e instala o `.app` assinado com o certificado "Lumen Dev". |
+| Mostrar/ocultar a barra | ⌘ \ | Ctrl+\ |
+| Perguntar sobre a tela | ⌘ ⇧ ↩ | Ctrl+Shift+Enter |
+| O que eu digo agora? | ⌘ ⇧ S | Ctrl+Shift+S |
+| Gravar / pausar | ⌘ ⇧ M | Ctrl+Shift+M |
+| Ações no texto selecionado | ⌘ ⇧ L | Ctrl+Shift+L |
 
-Para gerar de novo: `npm run dist:win` e `npm run dist:linux` (no Linux, o `.exe` precisa do Wine instalado), `npm run dist` no Mac.
+## Estado atual e próximos passos
 
-### Primeiro uso em cada sistema
-- **Windows**: só o microfone tem permissão (Configurações → Privacidade e segurança → Microfone → "Permitir que aplicativos da área de trabalho acessem o microfone"). Tela e áudio das chamadas funcionam direto. Sem certificado de assinatura, o SmartScreen mostra "O Windows protegeu o computador" na primeira vez: clique em **Mais informações → Executar assim mesmo**.
-- **Linux**: microfone e áudio passam pelo PipeWire/PulseAudio. No Wayland, o sistema pede para compartilhar a tela na primeira captura. Para o atalho de texto selecionado, instale `xdotool` (X11) ou `wtype` (Wayland).
-- **IA**: o onboarding oferece três caminhos: **Grátis na nuvem** (Gemini + Groq), **No seu computador** (Ollama, com link de download certo para o sistema e download do modelo de dentro do app) ou **Minha chave** (Claude/OpenAI).
+Funcional no macOS (Apple Silicon). Os instaladores de Windows e Linux já são gerados, mas ainda precisam de teste em máquinas reais.
 
-### Atalhos no Windows e Linux
-Os mesmos do Mac, trocando ⌘ por **Ctrl**: Ctrl+\ (barra), Ctrl+Shift+Enter (perguntar), Ctrl+Shift+S (o que digo?), Ctrl+Shift+M (gravar/pausar), Ctrl+Shift+L (texto selecionado). O ícone do Lumen fica na bandeja, perto do relógio.
+- [ ] Testar o instalador e uma gravação completa em Windows 10/11
+- [ ] Testar AppImage e .deb em Ubuntu (X11 e Wayland)
+- [ ] Transcrição local (Whisper no computador) para um modo 100% offline
+- [ ] Ativar `sandbox: true` nas janelas do Electron
+- [ ] Assinatura Developer ID (Mac) e de código (Windows) para distribuir sem avisos
 
-## Primeiro uso (macOS)
+## Uso responsável
 
-1. Abra o Lumen. O onboarding pede **Microfone**, **Tela e áudio do sistema**, **Acessibilidade** (opcional) e uma **chave de IA**.
-2. A permissão de tela só vale depois de reabrir o app: use o botão "Já ativei, reabrir o Lumen".
-3. Para transcrever áudio é preciso uma chave da **OpenAI** (gpt-4o-mini-transcribe) ou da **Groq** (Whisper v3 turbo). As respostas podem vir do **Claude** ou da **OpenAI**.
+Avise as pessoas antes de gravar uma conversa. Em muitos lugares, gravar sem consentimento é ilegal, e em ambientes de trabalho costuma violar políticas internas.
 
-## Atalhos
+---
 
-| Ação | Atalho |
-|---|---|
-| Mostrar/ocultar a barra | ⌘ \ |
-| Perguntar sobre a tela | ⌘ ⇧ ↩ |
-| O que eu digo agora? | ⌘ ⇧ S |
-| Iniciar/parar a escuta | ⌘ ⇧ M |
-| Ações no texto selecionado | ⌘ ⇧ L |
-
-## Funcionalidades
-
-- **Barra flutuante** sempre visível, arrastável, em todos os Spaces e sobre apps em tela cheia; a janela acompanha o tamanho do conteúdo.
-- **Modos** (Geral, Reuniões, Vendas, Programação, Atendimento) com instruções editáveis e **documentos de contexto** (PDF, TXT, MD, CSV, JSON).
-- **Escuta ao vivo** do microfone ("Você") e do áudio do sistema ("Outros"), com medidores de nível e cronômetro.
-- **Perguntar** com captura da tela; as janelas do Lumen ficam fora da captura.
-- **"O que digo?"**: sugere uma resposta pronta com base na transcrição e na tela.
-- **Ações no texto selecionado** em qualquer app: explicar, resumir, reescrever, corrigir, traduzir e responder, com **substituir no app** para colar o resultado de volta.
-- **Histórico** com busca, renomear, respostas, transcrição, **resumo com próximos passos** e exportação em Markdown.
-
-### Melhorias
-
-- **Dois provedores de IA** (Claude e OpenAI), com troca automática quando falta a chave de um deles.
-- **Corte por pausa de fala**: o áudio é dividido nas pausas naturais e trechos de silêncio nem são enviados, o que reduz custo e evita frases inventadas pela transcrição. Também há um filtro de "alucinações" comuns.
-- **Sugestão automática** quando alguém faz uma pergunta na conversa (opcional).
-- **Título automático** das sessões e **resumo com decisões e próximos passos**.
-- **Chaves criptografadas** no Keychain (safeStorage) e **escrita atômica** dos dados.
-- Ícone na **barra de menus**, botão para **reabrir depois da permissão** e **sensibilidade do microfone** ajustável.
-- Sem dependências nativas para compilar (sem SQLite/node-gyp), então o build é mais simples.
-
-## Estrutura
-
-```
-src/main/        processo principal: janelas, IPC, permissões, captura, IA, transcrição, armazenamento
-src/preload/     ponte segura (window.lumen)
-src/renderer/    React: Bar (barra), Home (início, histórico, modos, configurações), Onboarding
-src/shared/      tipos e atalhos compartilhados
-```
-
-Os dados ficam em `~/Library/Application Support/Lumen/` (`settings.json`, `modes.json`, `keys.json`, `sessions/*.json`).
+Desenvolvido por **Willian Barbosa** · [LinkedIn](https://www.linkedin.com/in/willianbarbosadeandrade)
