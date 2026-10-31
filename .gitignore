@@ -1,0 +1,25 @@
+# dependências e builds
+node_modules/
+out/
+dist/
+releases/
+*.tsbuildinfo
+
+# sistema e editores
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+
+# segredos locais (as chaves do app ficam no cofre do sistema, nunca no projeto)
+.env
+.env.*
+*.p12
+*.pem
+
+# temporários
+*.log
+*.tmp
+*.tar.gz

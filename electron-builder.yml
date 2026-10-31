@@ -1,0 +1,83 @@
+appId: com.willian.lumen
+productName: Lumen
+# Sem publicação automática (sem servidor de atualizações por enquanto).
+publish: null
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+  - resources/**
+  - '!**/*.map'
+afterSign: build/adhoc-sign.cjs
+asarUnpack:
+  - node_modules/electron-audio-loopback/**
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+    - target: zip
+  icon: build/icon.png
+  # Sem certificado: o hook build/adhoc-sign.cjs faz a assinatura ad-hoc local.
+  # Para distribuir, rode com CSC_NAME="Developer ID Application: Seu Nome (TEAMID)" e troque identity para esse nome.
+  identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  minimumSystemVersion: "13.0"
+  extendInfo:
+    LSUIElement: false
+    NSMicrophoneUsageDescription: O Lumen usa o microfone para transcrever o seu lado da conversa quando você ativa a escuta.
+    NSAudioCaptureUsageDescription: O Lumen captura o áudio do sistema para transcrever o que os outros participantes dizem.
+    NSScreenCaptureUsageDescription: O Lumen lê a tela apenas quando você pede uma resposta com contexto visual.
+    NSAppleEventsUsageDescription: O Lumen usa o System Events para copiar e colar o texto selecionado quando você aciona as ações de texto.
+dmg:
+  title: Lumen ${version}
+  artifactName: Lumen-${version}-${arch}.${ext}
+
+# ---------- Windows: instalador de um clique (.exe) ----------
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: Lumen-Setup-${version}.${ext}
+  # Sem certificado de assinatura, o Windows mostra o aviso "SmartScreen" na primeira vez.
+  signAndEditExecutable: true
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Lumen
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  uninstallDisplayName: Lumen
+
+# ---------- Linux: AppImage (roda direto) e .deb (Ubuntu/Debian) ----------
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Utility
+  executableName: lumen
+  maintainer: Willian Barbosa <willianbarbosa.comunic@gmail.com>
+  synopsis: Copiloto de IA que ouve, lê a tela e age no texto selecionado
+  artifactName: Lumen-${version}-${arch}.${ext}
+  desktop:
+    entry:
+      Name: Lumen
+      Comment: Copiloto de IA para reuniões, estudo e trabalho
+      StartupWMClass: Lumen
+deb:
+  # Ferramentas para copiar o texto selecionado em outros apps (X11/Wayland).
+  depends: [libnotify4, libxtst6, libnss3, xdotool]
+  recommends: [wtype]

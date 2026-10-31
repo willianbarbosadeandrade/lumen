@@ -1,0 +1,50 @@
+{
+  "name": "lumen",
+  "productName": "Lumen",
+  "version": "0.2.0",
+  "description": "Copiloto de IA para macOS: escuta a conversa, entende a tela e age sobre o texto selecionado.",
+  "main": "./out/main/index.js",
+  "author": {
+    "name": "Willian Barbosa",
+    "email": "willianbarbosa.comunic@gmail.com"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "start": "electron-vite preview",
+    "dist": "bash build/create-cert.sh && npm run typecheck && electron-vite build && electron-builder --mac --arm64",
+    "install:mac": "osascript -e 'quit app \"Lumen\"' 2>/dev/null; sleep 1; killall Lumen 2>/dev/null; rm -rf /Applications/Lumen.app && ditto dist/mac-arm64/Lumen.app /Applications/Lumen.app && open /Applications/Lumen.app",
+    "app": "npm run dist && npm run install:mac",
+    "dist:universal": "npm run typecheck && electron-vite build && electron-builder --mac --universal",
+    "postinstall": "electron-builder install-app-deps",
+    "setup:cert": "bash build/create-cert.sh",
+    "reset:perms": "tccutil reset ScreenCapture com.willian.lumen; tccutil reset Accessibility com.willian.lumen; tccutil reset Microphone com.willian.lumen; tccutil reset AppleEvents com.willian.lumen; true",
+    "dist:win": "npm run typecheck && electron-vite build && electron-builder --win --x64",
+    "dist:linux": "npm run typecheck && electron-vite build && electron-builder --linux --x64"
+  },
+  "dependencies": {
+    "electron-audio-loopback": "1.0.6",
+    "pdfjs-dist": "4.10.38",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "react-markdown": "10.1.0",
+    "react-syntax-highlighter": "15.6.1",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "@types/react-syntax-highlighter": "15.5.13",
+    "@vitejs/plugin-react": "4.7.0",
+    "electron": "44.9.3",
+    "electron-builder": "26.0.12",
+    "electron-vite": "4.0.1",
+    "typescript": "5.8.3",
+    "vite": "7.1.5"
+  },
+  "homepage": "https://lumen.app"
+}
