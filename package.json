@@ -46,5 +46,12 @@
     "typescript": "5.8.3",
     "vite": "7.1.5"
   },
-  "homepage": "https://lumen.app"
+  "homepage": "https://github.com/willianbarbosadeandrade/lumen",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/willianbarbosadeandrade/lumen.git"
+  },
+  "bugs": {
+    "url": "https://github.com/willianbarbosadeandrade/lumen/issues"
+  }
 }
