@@ -13,8 +13,13 @@ files:
 afterSign: build/adhoc-sign.cjs
 asarUnpack:
   - node_modules/electron-audio-loopback/**
+  # Transcrição no computador: módulo nativo e bibliotecas do onnxruntime precisam ficar fora do .asar.
+  - node_modules/sherpa-onnx-node/**
+  - node_modules/sherpa-onnx-*/**
 mac:
   category: public.app-category.productivity
+  # Só o módulo de transcrição do próprio sistema vai no instalador.
+  files: ['!node_modules/sherpa-onnx-{win,linux}-*/**']
   target:
     - target: dmg
     - target: zip
@@ -39,6 +44,7 @@ dmg:
 
 # ---------- Windows: instalador de um clique (.exe) ----------
 win:
+  files: ['!node_modules/sherpa-onnx-{darwin,linux}-*/**']
   target:
     - target: nsis
       arch: [x64]
@@ -61,6 +67,7 @@ nsis:
 
 # ---------- Linux: AppImage (roda direto) e .deb (Ubuntu/Debian) ----------
 linux:
+  files: ['!node_modules/sherpa-onnx-{darwin,win}-*/**']
   target:
     - target: AppImage
       arch: [x64]

@@ -2,7 +2,7 @@
 
 **Copiloto de IA para desktop.** É uma barra flutuante que fica sobre qualquer app: ouve a conversa, lê a tela quando você pede, sugere o que responder, age sobre o texto selecionado e guarda cada sessão com a transcrição revisada e um resumo.
 
-`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.2.3
+`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.3.0
 
 <!-- TODO: adicionar um GIF da barra em uso (docs/demo.gif) -->
 
@@ -54,19 +54,20 @@ Projeto autoral, escrito do zero a partir de uma lista de funcionalidades observ
 
 ## Decisões técnicas que valem a leitura
 
-- **Dupla transcrição.** A primeira é rápida e ao vivo (Whisper turbo), em trechos cortados por pausa de fala, para alimentar as sugestões. A segunda é fiel e feita a partir do áudio completo, com o Gemini devolvendo JSON estruturado com quem falou e quando. Se a final falhar, a ao vivo fica como reserva.
+- **Dupla transcrição.** A primeira é rápida e ao vivo (Whisper turbo na Groq), em trechos cortados por pausa de fala, para alimentar as sugestões. A segunda é fiel e feita **no próprio computador** a partir do áudio completo: separa as vozes (pyannote + impressão de voz TitaNet), reconhece a mesma pessoa entre as partes da gravação e transcreve com o Whisper turbo, tudo via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) num processo separado. Se falhar, o Whisper na nuvem e depois a versão ao vivo ficam como reserva.
 - **Tolerância a falhas nos provedores.** Detecta modelo aposentado (404) e troca para o mais novo, faz até 3 tentativas em 429/5xx e, se o provedor principal continuar fora, usa outro com chave configurada.
 - **Ollama pela API nativa** (`/api/chat`), porque só ela aceita `num_ctx`, `keep_alive` e `think`. Há também um orçamento de contexto calculado por memória disponível.
 - **Filtro de eco e de alucinação.** Remove falas do microfone que repetem o áudio dos alto-falantes e frases típicas que o Whisper inventa em silêncio.
 - **Gravação que não se perde.** Cada segundo de áudio vai direto para o disco, em partes de 5 minutos. Ao parar, a barra fica livre na hora e a revisão roda em segundo plano, parte por parte (Gemini → Whisper → trecho ao vivo), com limite de tempo em toda chamada e "Tentar de novo" só do que faltou. Ao abrir, o app revisa sozinho gravações que ficaram pela metade.
 - **Resumo da reunião inteira.** Quando a transcrição não cabe no modelo (ex.: Ollama), o resumo é feito em etapas: anota cada bloco e depois junta. Registro de diagnóstico em `~/Library/Logs/Lumen/main.log`.
-- **Sem módulos nativos.** Não usa SQLite nem node-gyp, então o build é o mesmo nos três sistemas.
+- **Sem compilar nada.** O único módulo nativo (sherpa-onnx) vem pré-compilado para macOS, Windows e Linux; não há SQLite nem node-gyp.
 
 ## Provedores de IA
 
 | Provedor | Custo | Lê a tela | Uso |
 |---|---|---|---|
-| Gemini | Grátis com limites | Sim | Respostas e transcrição final com identificação de vozes |
+| Gemini | Grátis com limites | Sim | Respostas, sugestões e resumos |
+| No computador (sherpa-onnx) | Local, modelos de ~1,1 GB baixados no app | — | Transcrição final com identificação de quem falou |
 | Groq | Grátis com limites | Não | Transcrição ao vivo e reserva rápida |
 | Ollama | Local | Com modelos de visão | Uso privado e offline |
 | Claude / OpenAI | Pago (chave própria) | Sim | Máxima qualidade |
@@ -102,7 +103,8 @@ Funcional no macOS (Apple Silicon). Os instaladores de Windows e Linux já são 
 
 - [ ] Testar o instalador e uma gravação completa em Windows 10/11
 - [ ] Testar AppImage e .deb em Ubuntu (X11 e Wayland)
-- [ ] Transcrição local (Whisper no computador) para um modo 100% offline
+- [x] Transcrição final no computador, com identificação de quem falou
+- [ ] Transcrição ao vivo também local, para um modo 100% offline
 - [ ] Ativar `sandbox: true` nas janelas do Electron
 - [ ] Assinatura Developer ID (Mac) e de código (Windows) para distribuir sem avisos
 

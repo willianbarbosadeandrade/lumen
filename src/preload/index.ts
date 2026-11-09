@@ -4,6 +4,7 @@ import type {
   AiDone,
   AskRequest,
   FinalizeStatus,
+  LocalModelsStatus,
   KeyStatus,
   Mode,
   PermissionKind,
@@ -60,6 +61,12 @@ const api = {
     onNav: (cb: (route: string) => void) => on('nav', cb)
   },
   log: (message: string) => ipcRenderer.send('log', message),
+  stt: {
+    status: (): Promise<LocalModelsStatus> => ipcRenderer.invoke('stt:status'),
+    download: (): Promise<LocalModelsStatus> => ipcRenderer.invoke('stt:download'),
+    cancel: () => ipcRenderer.send('stt:cancel'),
+    onProgress: (cb: (s: LocalModelsStatus) => void) => on('stt:progress', cb)
+  },
   bar: {
     /** Informa o estado da gravação ao processo principal (cronômetro na barra de menus). */
     recState: (p: { status: string; elapsed: number; sessionId?: string }) => ipcRenderer.send('rec:state', p),

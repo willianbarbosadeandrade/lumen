@@ -30,7 +30,7 @@ export interface Settings {
   ollamaUrl: string
   ollamaContext: number
   autoStopMinutes: number
-  finalTranscriber: 'auto' | 'gemini' | 'whisper'
+  finalTranscriber: 'auto' | 'local' | 'gemini' | 'whisper'
   transcriptionProvider: TranscriptionProviderId
   transcriptionLanguage: string
   answerLanguage: string
@@ -95,7 +95,7 @@ export interface Session {
   /** Nomes dados pelo usuário a cada falante identificado (ex.: { "Pessoa 2": "Esposa" }). */
   speakerNames?: Record<string, string>
   /** Motor usado na transcrição final. */
-  finalEngine?: 'gemini' | 'whisper'
+  finalEngine?: 'local' | 'gemini' | 'whisper'
   /** Resultado da última revisão: tudo revisado, parte revisada ou falhou (com o motivo). */
   finalState?: 'done' | 'partial' | 'failed'
   finalError?: string
@@ -108,6 +108,15 @@ export interface AudioPart {
   startedAt: number
   mime: string
   durationMs?: number
+}
+
+/** Modelos da transcrição no computador (Whisper + separação de vozes). */
+export interface LocalModelsStatus {
+  installed: boolean
+  downloading: boolean
+  done: number
+  total: number
+  error?: string
 }
 
 /** Situação da transcrição final (feita a partir do áudio completo, em segundo plano). */

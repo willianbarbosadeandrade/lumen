@@ -20,6 +20,7 @@ import { transcribeChunk } from './transcribe'
 import { echoesOf, isEcho } from './transcript'
 import { finalizeSession, finalizeStatuses } from './finalize'
 import { captureConsole, log, logPath } from './log'
+import { cancelDownload, downloadModels, localModelsStatus, stopLocalStt } from './localStt'
 import {
   allWindows,
   keepBarOnTop,
@@ -465,6 +466,10 @@ function registerIpc(): void {
     store.finishSessionAudio(sessionId, file, wav, durationMs)
   )
   ipcMain.handle('session:finalizeStatus', () => finalizeStatuses())
+  // Transcrição no computador (modelos baixados de dentro do app)
+  ipcMain.handle('stt:status', () => localModelsStatus())
+  ipcMain.handle('stt:download', () => downloadModels((st) => broadcast('stt:progress', st)))
+  ipcMain.on('stt:cancel', () => cancelDownload())
   ipcMain.handle('session:summarize', async (_e, id: string) => {
     try {
       await runAsk({ requestId: randomUUID(), kind: 'summary', sessionId: id }, { signal: AbortSignal.timeout(600_000), onText: () => {} })
@@ -659,6 +664,8 @@ app.on('before-quit', () => {
   setQuitting()
   if (activeSessionId) store.updateSession(activeSessionId, (x) => (x.endedAt ??= Date.now()))
   globalShortcut.unregisterAll()
+  stopLocalStt()
+  cancelDownload()
   for (const ctrl of inflight.values()) ctrl.abort()
   tray?.destroy()
   tray = null

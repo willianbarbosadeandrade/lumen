@@ -1,10 +1,12 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { AudioPart, FinalizeStatus, Session, TranscriptLine } from '@shared/types'
+import type { AudioPart, FinalizeStatus, Session, Settings, TranscriptLine } from '@shared/types'
 import { getMode, getSession, getSettings, sessionAudioDir, updateSession } from './store'
 import { geminiAvailable, transcribeWithGemini } from './geminiAudio'
 import { transcribeFile, transcriptionAvailable } from './transcribe'
+import { beginLocalSession, localAvailable, transcribeLocal } from './localStt'
+import type { SttSpeaker } from './sttWorker'
 import { echoesOf } from './transcript'
 import { log } from './log'
 
@@ -48,11 +50,35 @@ export function mergeAdjacent(lines: Line[], gapMs = 1500): TranscriptLine[] {
 
 /** Resultado de uma parte, guardado em disco para não refazer o que já deu certo. */
 interface PartResult {
-  engine: 'gemini' | 'whisper'
+  engine: 'local' | 'gemini' | 'whisper'
   lines: { label?: string; text: string; offsetMs: number; endMs: number }[]
+  /** Impressões de voz (motor local), para reconhecer as mesmas pessoas ao retomar. */
+  speakers?: SttSpeaker[]
+}
+
+type Engine = PartResult['engine']
+
+/**
+ * Ordem dos motores na revisão final. Automático: no computador (se os modelos estiverem
+ * instalados) e, se falhar, o Whisper na nuvem. O Gemini só entra quando escolhido.
+ */
+function engineOrder(pref: Settings['finalTranscriber']): Engine[] {
+  const cloud: Engine[] = transcriptionAvailable() ? ['whisper'] : []
+  const local: Engine[] = localAvailable() ? ['local'] : []
+  if (pref === 'whisper') return cloud
+  if (pref === 'gemini') return [...(geminiAvailable() ? (['gemini'] as Engine[]) : []), ...cloud]
+  return [...local, ...cloud]
 }
 
 const cacheFile = (dir: string, part: AudioPart) => join(dir, `${part.file}.final.json`)
+
+function readCache(file: string): PartResult | null {
+  try {
+    return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as PartResult) : null
+  } catch {
+    return null
+  }
+}
 
 /** Intervalo de tempo coberto por uma parte (para usar a transcrição ao vivo quando a revisão falha). */
 function partWindow(part: AudioPart, parts: AudioPart[], session: Session): [number, number] {
@@ -67,42 +93,41 @@ async function transcribePart(
   part: AudioPart,
   context: string,
   known: string[],
-  useGemini: boolean,
-  onGeminiError: (msg: string) => void
+  engines: Engine[],
+  onEngineError: (engine: Engine, msg: string) => void
 ): Promise<PartResult> {
   const errors: string[] = []
   const wavPath = part.wav ? join(dir, part.wav) : null
-  if (useGemini && wavPath && existsSync(wavPath)) {
+  const prefix = part.speaker === 'me' ? 'Pessoa' : 'Participante'
+  for (const engine of engines) {
     try {
-      const items = await transcribeWithGemini(readFileSync(wavPath), part.speaker === 'me' ? 'Pessoa' : 'Participante', context, known)
-      return {
-        engine: 'gemini',
-        lines: items.map((it, i) => ({
-          label: it.speaker,
-          text: it.text,
-          offsetMs: it.offsetMs,
-          endMs: items[i + 1]?.offsetMs ?? it.offsetMs
-        }))
+      if (engine === 'local') {
+        if (!wavPath || !existsSync(wavPath)) continue // o motor local lê o WAV 16 kHz
+        const lang = getSettings().transcriptionLanguage
+        const r = await transcribeLocal({ wavPath, prefix, language: lang && lang !== 'auto' ? lang : '', numSpeakers: 0 })
+        return {
+          engine,
+          lines: r.lines.map((l) => ({ label: l.label, text: l.text, offsetMs: Math.round(l.start * 1000), endMs: Math.round(l.end * 1000) })),
+          speakers: r.speakers
+        }
       }
-    } catch (e) {
-      errors.push(`Gemini: ${(e as Error).message}`)
-      onGeminiError((e as Error).message)
-    }
-  }
-  if (transcriptionAvailable()) {
-    try {
+      if (engine === 'gemini') {
+        if (!wavPath || !existsSync(wavPath)) continue
+        const items = await transcribeWithGemini(readFileSync(wavPath), prefix, context, known)
+        return {
+          engine,
+          lines: items.map((it, i) => ({ label: it.speaker, text: it.text, offsetMs: it.offsetMs, endMs: items[i + 1]?.offsetMs ?? it.offsetMs }))
+        }
+      }
       const segments = await transcribeFile(readFileSync(join(dir, part.file)), part.mime, context)
-      return {
-        engine: 'whisper',
-        lines: segments.map((s) => ({ text: s.text, offsetMs: Math.round(s.start * 1000), endMs: Math.round(s.end * 1000) }))
-      }
+      return { engine, lines: segments.map((s) => ({ text: s.text, offsetMs: Math.round(s.start * 1000), endMs: Math.round(s.end * 1000) })) }
     } catch (e) {
-      errors.push(`Whisper: ${(e as Error).message}`)
+      const msg = (e as Error).message
+      errors.push(`${engine}: ${msg}`)
+      onEngineError(engine, msg)
     }
-  } else if (!useGemini) {
-    errors.push('nenhuma chave de transcrição configurada (Gemini, Groq ou OpenAI)')
   }
-  throw new Error(errors.join(' · ') || 'nenhum serviço de transcrição disponível')
+  throw new Error(errors.join(' · ') || 'nenhum motor de transcrição disponível (baixe a transcrição no computador ou configure a Groq)')
 }
 
 // ---------- Controle das revisões em andamento ----------
@@ -115,7 +140,7 @@ export function finalizeStatuses(): FinalizeStatus[] {
 
 /**
  * Refaz a transcrição da sessão a partir do áudio completo, parte por parte (5 min cada):
- * Gemini (identifica quem fala) → Whisper → trecho da transcrição ao vivo.
+ * no computador (Whisper + quem falou) → Whisper na nuvem → trecho da transcrição ao vivo.
  * Nunca é tudo-ou-nada: cada parte que dá certo é salva; as que falham ficam com a versão ao vivo
  * e podem ser refeitas depois (só elas). A transcrição ao vivo original fica em `liveTranscript`.
  */
@@ -137,11 +162,11 @@ export async function finalizeSession(id: string, opts: { force?: boolean; onSta
   try {
     const live = session.liveTranscript ?? session.transcript
     const pref = getSettings().finalTranscriber
-    let useGemini = pref !== 'whisper' && geminiAvailable()
-    // Se o Gemini falhar, o resto da revisão segue com o Whisper (senão cada parte esperaria o Gemini de novo).
-    const onGeminiError = (msg: string) => {
-      log.warn(`[finalize] Gemini falhou (${msg}); seguindo com o Whisper nas próximas partes`)
-      if (transcriptionAvailable()) useGemini = false
+    let order = engineOrder(pref)
+    // Um motor que falha sai da fila no resto desta revisão (senão cada parte esperaria por ele de novo).
+    const onEngineError = (engine: Engine, msg: string) => {
+      log.warn(`[finalize] ${engine} falhou (${msg}); seguindo com ${order.filter((e) => e !== engine).join(' → ') || 'a versão ao vivo'}`)
+      if (order.length > 1) order = order.filter((e) => e !== engine)
     }
     const vocabulary = getMode(session.modeId).name
     const lines: Line[] = []
@@ -151,22 +176,28 @@ export async function finalizeSession(id: string, opts: { force?: boolean; onSta
     const engines = new Set<string>()
     const errors: string[] = []
     emit({ sessionId: id, state: 'running', done, total: parts.length })
-    log.info(`[finalize] ${id}: ${parts.length} partes, gemini=${useGemini}, whisper=${transcriptionAvailable()}`)
+    log.info(`[finalize] ${id}: ${parts.length} partes, motores: ${order.join(' → ') || 'nenhum'}`)
+
+    // Motor local: pessoas novas nesta sessão, mais as vozes já reconhecidas em partes guardadas.
+    if (order.includes('local')) {
+      const seeds: Record<string, SttSpeaker[]> = { Pessoa: [], Participante: [] }
+      if (!opts.force)
+        for (const part of parts) {
+          const c = readCache(cacheFile(dir, part))
+          if (c?.engine === 'local') seeds[part.speaker === 'me' ? 'Pessoa' : 'Participante'].push(...(c.speakers ?? []))
+        }
+      await beginLocalSession(Object.entries(seeds).map(([prefix, speakers]) => ({ prefix, speakers }))).catch((e) =>
+        onEngineError('local', (e as Error).message)
+      )
+    }
 
     for (const part of parts) {
       const cache = cacheFile(dir, part)
-      let result: PartResult | null = null
-      if (!opts.force && existsSync(cache)) {
-        try {
-          result = JSON.parse(readFileSync(cache, 'utf8')) as PartResult
-        } catch {
-          result = null
-        }
-      }
+      let result: PartResult | null = opts.force ? null : readCache(cache)
       if (!result) {
         const context = lines.filter((l) => l.speaker === part.speaker).slice(-8).map((l) => l.text).join(' ') || vocabulary
         try {
-          result = await transcribePart(dir, part, context, known[part.speaker], useGemini, onGeminiError)
+          result = await transcribePart(dir, part, context, known[part.speaker], order, onEngineError)
           writeFileSync(cache, JSON.stringify(result))
           log.info(`[finalize] ${part.file}: ${result.engine}, ${result.lines.length} falas`)
         } catch (e) {
@@ -221,7 +252,7 @@ export async function finalizeSession(id: string, opts: { force?: boolean; onSta
       s.liveTranscript = s.liveTranscript ?? s.transcript
       s.transcript = finalLines
       s.finalized = true
-      s.finalEngine = engines.has('gemini') ? 'gemini' : 'whisper'
+      s.finalEngine = engines.has('local') ? 'local' : engines.has('gemini') ? 'gemini' : 'whisper'
       s.finalState = state
       s.finalError = fallbackParts ? errors[0] : undefined
     })

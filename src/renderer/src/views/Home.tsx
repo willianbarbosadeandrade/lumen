@@ -7,6 +7,7 @@ import {
   type ShortcutName,
   type ShortcutStatus,
   type FinalizeStatus,
+  type LocalModelsStatus,
   type KeyStatus,
   type Mode,
   type PermissionsStatus,
@@ -357,7 +358,13 @@ function HistoryPage() {
             <p className="muted small">
               {fmtDate(session.startedAt)} · {fmtDuration(session.startedAt, session.endedAt)} · {session.transcript.length} falas ·{' '}
               {session.messages.filter((m) => m.role === 'assistant').length} respostas
-              {session.finalized ? (session.finalEngine === 'gemini' ? ' · revisada pelo Gemini, com identificação de quem fala' : ' · revisada do áudio completo') : ''}
+              {session.finalized
+                ? session.finalEngine === 'local'
+                  ? ' · revisada no computador, com identificação de quem fala'
+                  : session.finalEngine === 'gemini'
+                    ? ' · revisada pelo Gemini, com identificação de quem fala'
+                    : ' · revisada do áudio completo'
+                : ''}
             </p>
             <ReviewNotice session={session} status={review[session.id]} />
 
@@ -776,6 +783,51 @@ function OllamaSection({ settings, patch }: { settings: Settings; patch: (p: Par
   )
 }
 
+const fmtGB = (b: number) => `${(b / 1e9).toFixed(1).replace('.', ',')} GB`
+
+/** Transcrição no computador: baixa os modelos (uma vez) e mostra o progresso. */
+function LocalSttCard() {
+  const [st, setSt] = useState<LocalModelsStatus | null>(null)
+  useEffect(() => {
+    void window.lumen.stt.status().then(setSt)
+    return window.lumen.stt.onProgress(setSt)
+  }, [])
+  if (!st) return null
+  const pct = Math.round((st.done / st.total) * 100)
+  return (
+    <section className="card form">
+      <h3>Transcrição no computador</h3>
+      <p className="muted small">
+        Depois de cada gravação, o Lumen refaz a transcrição no próprio computador com o Whisper e separa quem falou pela voz
+        ("Pessoa 1", "Participante 2"…). Nada sai da máquina e não depende de chave. Leva alguns minutos por hora de reunião, em
+        segundo plano.
+      </p>
+      {st.installed ? (
+        <p className="ok-text small">✓ Instalada ({fmtGB(st.total)}).</p>
+      ) : st.downloading ? (
+        <div className="row">
+          <div className="progress grow">
+            <div style={{ width: `${Math.max(2, pct)}%` }} />
+            <small className="muted">
+              Baixando… {pct}% · {fmtGB(st.done)} de {fmtGB(st.total)}
+            </small>
+          </div>
+          <button className="ghost sm" onClick={() => window.lumen.stt.cancel()}>
+            Cancelar
+          </button>
+        </div>
+      ) : (
+        <div className="row">
+          <button className="primary sm" onClick={() => void window.lumen.stt.download()}>
+            {st.done > 0 ? 'Continuar download' : `Baixar modelos (${fmtGB(st.total)})`}
+          </button>
+          {st.error && <span className="error small">{st.error}</span>}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function SettingsPage() {
   const [dataDir, setDataDir] = useState('')
   useEffect(() => void window.lumen.system.info().then((i) => setDataDir(i.dataDir)), [])
@@ -845,6 +897,8 @@ function SettingsPage() {
         )}
       </section>
 
+      <LocalSttCard />
+
       <section className="card form">
         <h3>Transcrição</h3>
         <div className="segmented">
@@ -860,9 +914,10 @@ function SettingsPage() {
         <label>
           <span>Revisão final (ao parar a gravação)</span>
           <select value={s.finalTranscriber} onChange={(e) => void patch({ finalTranscriber: e.target.value as Settings['finalTranscriber'] })}>
-            <option value="auto">Automático: Gemini se houver chave, senão Whisper</option>
-            <option value="gemini">Gemini · identifica quem fala (recomendado)</option>
-            <option value="whisper">Whisper · só texto, sem separar as vozes</option>
+            <option value="auto">Automático: no computador se instalado, senão Whisper na nuvem</option>
+            <option value="local">No computador · identifica quem fala, nada sai do Mac</option>
+            <option value="whisper">Whisper na nuvem (Groq/OpenAI) · só texto</option>
+            <option value="gemini">Gemini · identifica quem fala (experimental)</option>
           </select>
         </label>
         <div className="row">
@@ -875,6 +930,12 @@ function SettingsPage() {
               <option value="ar">Árabe</option>
               <option value="auto">Detectar automaticamente</option>
             </select>
+            {s.transcriptionLanguage !== 'auto' && (
+              <small className="muted">
+                Se a conversa tiver outro idioma, o Whisper pode traduzir em vez de transcrever. Em reuniões com mais de um idioma, use
+                “Detectar automaticamente”.
+              </small>
+            )}
           </label>
           <label className="grow">
             <span>Sensibilidade do microfone</span>
