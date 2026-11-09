@@ -38,6 +38,9 @@ exports.default = async function sign(context) {
   const entitlements = path.join(__dirname, 'entitlements.mac.plist')
   const identity = pickIdentity()
   console.log(`  • signing (Lumen)  identity=${identity === '-' ? 'ad-hoc (permissões resetam a cada build)' : identity}`)
+  // Pastas sincronizadas com o iCloud (ex.: ~/Documents) colam atributos estendidos nos arquivos,
+  // e o codesign recusa ("resource fork, Finder information, or similar detritus not allowed").
+  execFileSync('xattr', ['-cr', app], { stdio: 'inherit' })
   execFileSync(
     'codesign',
     ['--force', '--deep', '--options', 'runtime', '--entitlements', entitlements, '--sign', identity, app],
