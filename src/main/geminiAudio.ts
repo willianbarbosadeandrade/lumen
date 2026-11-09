@@ -64,15 +64,25 @@ export async function transcribeWithGemini(
     .filter(Boolean)
     .join('\n')
 
-  const body = JSON.stringify({
+  // Transcrever não precisa de "raciocínio": nos modelos Gemini 3 ele vem ligado e deixa uma parte
+  // de 5 min levar mais de 4 min. Tenta o nível mais baixo; se o modelo não aceitar, tenta o próximo.
+  const thinkingLevels: (string | null)[] = ['minimal', 'low', null]
+  const makeBody = (thinking: string | null) => JSON.stringify({
     contents: [
       {
         role: 'user',
         parts: [{ inline_data: { mime_type: 'audio/wav', data: wav.toString('base64') } }, { text: instructions }]
       }
     ],
-    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: SCHEMA }
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 32_768,
+      responseMimeType: 'application/json',
+      responseSchema: SCHEMA,
+      ...(thinking ? { thinkingConfig: { thinkingLevel: thinking } } : {})
+    }
   })
+  let body = makeBody(thinkingLevels[0])
 
   // Repete em caso de sobrecarga momentânea (o Gemini grátis às vezes responde 503).
   const delays = [2000, 5000, 10000]
@@ -86,10 +96,10 @@ export async function transcribeWithGemini(
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
         body,
-        signal: AbortSignal.timeout(240_000)
+        signal: AbortSignal.timeout(180_000)
       })
     } catch (e) {
-      if ((e as Error).name === 'TimeoutError') throw new Error('o Gemini não respondeu em 4 minutos')
+      if ((e as Error).name === 'TimeoutError') throw new Error('o Gemini não respondeu em 3 minutos')
       if (attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]))
         continue
@@ -108,6 +118,15 @@ export async function transcribeWithGemini(
       return items
         .filter((i) => i.text?.trim())
         .map((i) => ({ speaker: (i.speaker || `${prefix} 1`).trim(), offsetMs: parseClock(i.start || '0:00'), text: i.text!.trim() }))
+    }
+    if (res.status === 400 && thinkingLevels.length > 1) {
+      const detail = await res.clone().text().catch(() => '')
+      if (/thinking/i.test(detail)) {
+        thinkingLevels.shift()
+        body = makeBody(thinkingLevels[0])
+        attempt--
+        continue
+      }
     }
     if (res.status === 404 && !discovered) {
       // Modelo aposentado: descobre o Flash mais recente e tenta de novo.

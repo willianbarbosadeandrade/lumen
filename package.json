@@ -1,7 +1,7 @@
 {
   "name": "lumen",
   "productName": "Lumen",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Copiloto de IA para desktop (macOS, Windows e Linux): escuta a conversa, entende a tela e age sobre o texto selecionado.",
   "main": "./out/main/index.js",
   "author": {

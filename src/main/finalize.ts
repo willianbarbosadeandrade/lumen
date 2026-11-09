@@ -62,7 +62,14 @@ function partWindow(part: AudioPart, parts: AudioPart[], session: Session): [num
   return [part.startedAt, session.endedAt ? Math.min(end, session.endedAt + 1000) : end]
 }
 
-async function transcribePart(dir: string, part: AudioPart, context: string, known: string[], useGemini: boolean): Promise<PartResult> {
+async function transcribePart(
+  dir: string,
+  part: AudioPart,
+  context: string,
+  known: string[],
+  useGemini: boolean,
+  onGeminiError: (msg: string) => void
+): Promise<PartResult> {
   const errors: string[] = []
   const wavPath = part.wav ? join(dir, part.wav) : null
   if (useGemini && wavPath && existsSync(wavPath)) {
@@ -79,6 +86,7 @@ async function transcribePart(dir: string, part: AudioPart, context: string, kno
       }
     } catch (e) {
       errors.push(`Gemini: ${(e as Error).message}`)
+      onGeminiError((e as Error).message)
     }
   }
   if (transcriptionAvailable()) {
@@ -129,7 +137,12 @@ export async function finalizeSession(id: string, opts: { force?: boolean; onSta
   try {
     const live = session.liveTranscript ?? session.transcript
     const pref = getSettings().finalTranscriber
-    const useGemini = pref !== 'whisper' && geminiAvailable()
+    let useGemini = pref !== 'whisper' && geminiAvailable()
+    // Se o Gemini falhar, o resto da revisão segue com o Whisper (senão cada parte esperaria o Gemini de novo).
+    const onGeminiError = (msg: string) => {
+      log.warn(`[finalize] Gemini falhou (${msg}); seguindo com o Whisper nas próximas partes`)
+      if (transcriptionAvailable()) useGemini = false
+    }
     const vocabulary = getMode(session.modeId).name
     const lines: Line[] = []
     const known: Record<'me' | 'them', string[]> = { me: [], them: [] }
@@ -153,7 +166,7 @@ export async function finalizeSession(id: string, opts: { force?: boolean; onSta
       if (!result) {
         const context = lines.filter((l) => l.speaker === part.speaker).slice(-8).map((l) => l.text).join(' ') || vocabulary
         try {
-          result = await transcribePart(dir, part, context, known[part.speaker], useGemini)
+          result = await transcribePart(dir, part, context, known[part.speaker], useGemini, onGeminiError)
           writeFileSync(cache, JSON.stringify(result))
           log.info(`[finalize] ${part.file}: ${result.engine}, ${result.lines.length} falas`)
         } catch (e) {
