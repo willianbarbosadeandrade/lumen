@@ -8,7 +8,13 @@ const HALLUCINATIONS = [
   /^thanks? for watching[.!]?$/i,
   /^tchau[.!]?$/i,
   /^\.+$/,
-  /^♪+$/
+  /^♪+$/,
+  // Frases que o Whisper inventa com silêncio ou som de fundo (vêm de legendas usadas no treino).
+  /субтитр/i,
+  /dimatorzok/i,
+  /продолжение следует/i,
+  /amara\.org/i,
+  /^(obrigad[oa] por assistir|thanks? for watching|please subscribe|like and subscribe)[.!]?$/i
 ]
 
 export const isHallucination = (text: string) => !text.trim() || HALLUCINATIONS.some((r) => r.test(text.trim()))

@@ -85,12 +85,19 @@ export function setKey(name: KeyName, value: string): KeyStatus {
   return keyStatus()
 }
 
+const keyCache = new Map<string, string>()
+
 export function getKey(name: KeyName): string | undefined {
   const envName = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY' }[name]
   const stored = readJson<Record<string, string>>(keysFile(), {})[name]
   if (stored?.startsWith('enc:')) {
+    // Guarda a chave aberta na memória: o Keychain é consultado uma vez por chave, não a cada chamada.
+    const hit = keyCache.get(stored)
+    if (hit !== undefined) return hit
     try {
-      return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
+      const value = safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
+      keyCache.set(stored, value)
+      return value
     } catch {
       return undefined
     }

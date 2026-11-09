@@ -122,6 +122,10 @@ async function afterRecording(id: string): Promise<void> {
  * áudio que já está no disco, a revisão roda e a barra volta.
  */
 function watchBar(win: BrowserWindow): void {
+  win.webContents.on('did-fail-load', (_e, code, desc) => log.error(`[barra] não carregou: ${desc} (${code})`))
+  win.webContents.on('console-message', (e) => {
+    if (e.level === 'error') log.warn(`[barra] ${e.message}`.slice(0, 1000))
+  })
   win.webContents.on('render-process-gone', (_e, details) => {
     log.error(`[barra] processo da barra caiu: ${details.reason} (${details.exitCode})`)
     const id = activeSessionId ?? recState.sessionId
@@ -243,9 +247,9 @@ function refreshTray(): void {
     {
       label:
         recState.status === 'recording'
-          ? `● Gravando (${clock(recState.elapsed)})`
+          ? '● Gravando'
           : recState.status === 'paused'
-            ? `❚❚ Gravação pausada (${clock(recState.elapsed)})`
+            ? '❚❚ Gravação pausada'
             : 'Lumen',
       enabled: false
     },
@@ -616,7 +620,10 @@ app.whenReady().then(() => {
   // Revisa (uma de cada vez) as gravações que ficaram sem revisão: sessões interrompidas e revisões que não terminaram.
   const pending = [...new Set([...orphans, ...store.sessionsPendingReview()])].filter((id) => store.getSession(id)?.audio?.length)
   if (pending.length) log.info(`[app] ${pending.length} sessão(ões) aguardando revisão: ${pending.join(', ')}`)
-  void pending.reduce((chain, id) => chain.then(() => afterRecording(id)), Promise.resolve())
+  // Só depois que a barra carregou: ler as chaves pode abrir o pedido de senha do Keychain, que
+  // bloqueia o app até ser respondido — não pode acontecer enquanto a barra ainda está carregando.
+  if (pending.length)
+    setTimeout(() => void pending.reduce((chain, id) => chain.then(() => afterRecording(id)), Promise.resolve()), 15_000)
 
   // Enquanto grava, a barra fica acima de tudo (inclusive de apps em tela cheia, como a chamada).
   setInterval(() => {

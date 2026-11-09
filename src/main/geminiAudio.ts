@@ -83,6 +83,7 @@ export async function transcribeWithGemini(
     }
   })
   let body = makeBody(thinkingLevels[0])
+  const timeoutMs = Math.min(180_000, 45_000 + Math.round((wav.length / 32_000) * 300))
 
   // Repete em caso de sobrecarga momentânea (o Gemini grátis às vezes responde 503).
   const delays = [2000, 5000, 10000]
@@ -91,15 +92,15 @@ export async function transcribeWithGemini(
   for (let attempt = 0; ; attempt++) {
     let res: Response
     try {
-      // Um arquivo de 5 min leva de 20 s a 2 min; sem resposta em 4 min, desiste desta parte.
+      // Limite proporcional à duração do áudio (WAV 16 kHz mono = 32 kB/s): 5 min → 2 min 15 s.
       res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
         body,
-        signal: AbortSignal.timeout(180_000)
+        signal: AbortSignal.timeout(timeoutMs)
       })
     } catch (e) {
-      if ((e as Error).name === 'TimeoutError') throw new Error('o Gemini não respondeu em 3 minutos')
+      if ((e as Error).name === 'TimeoutError') throw new Error(`o Gemini não respondeu em ${Math.round(timeoutMs / 1000)} s`)
       if (attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]))
         continue
