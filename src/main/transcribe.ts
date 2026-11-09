@@ -35,12 +35,20 @@ function provider() {
 
 const extOf = (mime: string) => (mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'webm')
 
-async function post(form: FormData, p: ReturnType<typeof provider>): Promise<any> {
-  const res = await fetch(`${p.base}/audio/transcriptions`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${p.key}` },
-    body: form
-  })
+async function post(form: FormData, p: ReturnType<typeof provider>, timeoutMs: number): Promise<any> {
+  let res: Response
+  try {
+    // Sempre com limite de tempo: uma chamada que não responde não pode travar a gravação.
+    res = await fetch(`${p.base}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${p.key}` },
+      body: form,
+      signal: AbortSignal.timeout(timeoutMs)
+    })
+  } catch (e) {
+    if ((e as Error).name === 'TimeoutError') throw new Error('A transcrição não respondeu a tempo.')
+    throw new Error(`Sem conexão com o serviço de transcrição (${(e as Error).message}).`)
+  }
   if (!res.ok) {
     const txt = await res.text().catch(() => '')
     if (res.status === 429) throw new Error('Limite de transcrição atingido no momento. Aguarde um pouco e continue.')
@@ -63,7 +71,7 @@ export async function transcribeChunk(audio: ArrayBuffer, mime: string, context 
   if (context) form.append('prompt', context.slice(-400))
   form.append('temperature', '0')
   form.append('response_format', 'json')
-  const json = (await post(form, p)) as { text?: string }
+  const json = (await post(form, p, 45_000)) as { text?: string }
   const text = (json.text ?? '').trim()
   return isHallucination(text) ? '' : text
 }
@@ -78,6 +86,15 @@ export interface FileSegment {
  * Transcrição final de um arquivo completo, com o modelo mais preciso e marcação de tempo por trecho.
  * Trechos que o próprio modelo marca como provável silêncio são descartados.
  */
+export function transcriptionAvailable(): boolean {
+  try {
+    provider()
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function transcribeFile(audio: Buffer, mime: string, vocabulary = ''): Promise<FileSegment[]> {
   const p = provider()
   const form = new FormData()
@@ -88,7 +105,7 @@ export async function transcribeFile(audio: Buffer, mime: string, vocabulary = '
   if (vocabulary) form.append('prompt', vocabulary.slice(0, 400))
   form.append('temperature', '0')
   form.append('response_format', 'verbose_json')
-  const json = (await post(form, p)) as {
+  const json = (await post(form, p, 240_000)) as {
     text?: string
     segments?: { start: number; end: number; text: string; no_speech_prob?: number; avg_logprob?: number }[]
   }

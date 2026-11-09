@@ -1,4 +1,5 @@
 import type { Speaker } from '@shared/types'
+import { toWav16k } from './wav'
 
 export interface Chunk {
   speaker: Speaker
@@ -119,16 +120,19 @@ export class SpeechChunker {
   }
 }
 
-export interface ArchivePart {
-  speaker: Speaker
-  blob: Blob
-  mime: string
-  startedAt: number
+/** Onde o ArchiveRecorder grava: o processo principal escreve os arquivos no disco. */
+export interface ArchiveSink {
+  begin(p: { speaker: Speaker; startedAt: number; mime: string }): Promise<string>
+  append(file: string, data: ArrayBuffer): Promise<void>
+  finish(file: string, wav: ArrayBuffer | undefined, durationMs: number): Promise<void>
+  log(message: string): void
 }
 
 /**
- * Grava o áudio completo (sem cortes de silêncio) em arquivos independentes de até 10 minutos.
- * É desse áudio que sai a transcrição final, mais fiel, feita quando a gravação termina.
+ * Grava o áudio completo (sem cortes de silêncio) em arquivos independentes de 5 minutos.
+ * Cada segundo gravado vai direto para o disco: se o app travar, fechar ou a barra cair,
+ * no máximo 1–2 segundos se perdem. No fim de cada parte, gera o WAV 16 kHz usado na
+ * transcrição final (se falhar, a transcrição final usa o arquivo original).
  */
 export class ArchiveRecorder {
   private rec: MediaRecorder | null = null
@@ -136,11 +140,12 @@ export class ArchiveRecorder {
   private stopped = false
   private mime = pickMime()
   private pending: Promise<void>[] = []
+  private writeErrors = 0
 
   constructor(
     private stream: MediaStream,
     private speaker: Speaker,
-    private onPart: (p: ArchivePart) => Promise<void>
+    private sink: ArchiveSink
   ) {}
 
   start(): void {
@@ -150,17 +155,39 @@ export class ArchiveRecorder {
 
   private next(): void {
     if (this.stopped) return
+    const mime = this.mime || 'audio/webm'
     const rec = new MediaRecorder(this.stream, this.mime ? { mimeType: this.mime, audioBitsPerSecond: 48_000 } : undefined)
     const parts: Blob[] = []
     const startedAt = Date.now()
+    // Escritas em ordem: primeiro registra a parte, depois anexa cada pedaço na sequência.
+    let writes: Promise<unknown> = this.sink.begin({ speaker: this.speaker, startedAt, mime })
+    const file = writes as Promise<string>
     let resolveDone!: () => void
     this.pending.push(new Promise<void>((r) => (resolveDone = r)))
-    rec.ondataavailable = (e) => e.data.size && parts.push(e.data)
+    rec.ondataavailable = (e) => {
+      if (!e.data.size) return
+      parts.push(e.data)
+      const data = e.data
+      writes = writes.then(async () => this.sink.append(await file, await data.arrayBuffer())).catch((err) => {
+        if (this.writeErrors++ < 5) this.sink.log(`falha ao gravar áudio (${this.speaker}): ${(err as Error)?.message ?? err}`)
+      })
+    }
+    rec.onerror = (e) => this.sink.log(`MediaRecorder (${this.speaker}) erro: ${String((e as ErrorEvent).error ?? e.type)}`)
     rec.onstop = () => {
-      const mime = rec.mimeType || this.mime || 'audio/webm'
-      const blob = new Blob(parts, { type: mime })
-      const save = blob.size > 2000 ? this.onPart({ speaker: this.speaker, blob, mime, startedAt }) : Promise.resolve()
-      void save.catch(() => {}).finally(resolveDone)
+      const durationMs = Date.now() - startedAt
+      const blob = new Blob(parts, { type: rec.mimeType || mime })
+      void writes
+        .then(async () => {
+          if (blob.size < 2000) return
+          // O WAV é um extra: se a conversão falhar ou demorar, o arquivo original já está salvo.
+          const wav = await withTimeout(toWav16k(blob), 60_000, 'conversão WAV demorou demais').catch((err) => {
+            this.sink.log(`WAV não gerado (${this.speaker}): ${(err as Error)?.message ?? err}`)
+            return undefined
+          })
+          await this.sink.finish(await file, wav, durationMs)
+        })
+        .catch((err) => this.sink.log(`falha ao fechar parte (${this.speaker}): ${(err as Error)?.message ?? err}`))
+        .finally(resolveDone)
     }
     rec.start(1000)
     this.rec = rec
@@ -171,12 +198,20 @@ export class ArchiveRecorder {
     this.next()
   }
 
-  /** Para e espera os arquivos terminarem de ser salvos. */
-  async stop(): Promise<void> {
+  /** Para e espera os arquivos terminarem de ser salvos (no máximo `maxWaitMs`). */
+  async stop(maxWaitMs = 20_000): Promise<void> {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
-    if (this.rec?.state === 'recording') this.rec.stop()
-    await Promise.all(this.pending)
+    if (this.rec?.state === 'recording') {
+      // Pede o último pedaço antes de parar, para ele ir para o disco junto.
+      try {
+        this.rec.requestData()
+      } catch {
+        /* já parado */
+      }
+      this.rec.stop()
+    }
+    await withTimeout(Promise.all(this.pending), maxWaitMs, 'salvamento do áudio demorou').catch((e) => this.sink.log(String(e?.message ?? e)))
   }
 }
 

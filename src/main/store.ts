@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { KeyStatus, Mode, Session, SessionMeta, Settings } from '@shared/types'
@@ -202,17 +202,49 @@ export function sessionAudioDir(id: string): string {
   return d
 }
 
-export function saveSessionAudio(id: string, speaker: 'me' | 'them', startedAt: number, mime: string, data: ArrayBuffer, wavData?: ArrayBuffer): void {
+const AUDIO_FILE = /^(me|them)-\d+\.(webm|ogg|mp4)$/
+
+export function audioFileName(speaker: 'me' | 'them', startedAt: number, mime: string): string {
   const ext = mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'webm'
-  const file = `${speaker}-${startedAt}.${ext}`
-  writeFileSync(join(sessionAudioDir(id), file), Buffer.from(data))
+  return `${speaker}-${startedAt}.${ext}`
+}
+
+/**
+ * Começa uma parte da gravação: o arquivo é registrado na sessão logo de saída e recebe o áudio
+ * aos poucos (a cada segundo). Assim, se o app travar ou fechar, o que já foi gravado está no disco.
+ */
+export function beginSessionAudio(id: string, speaker: 'me' | 'them', startedAt: number, mime: string): string {
+  const file = audioFileName(speaker, startedAt, mime)
+  writeFileSync(join(sessionAudioDir(id), file), Buffer.alloc(0))
+  updateSession(id, (s) => {
+    s.audio = [...(s.audio ?? []).filter((a) => a.file !== file), { file, speaker, startedAt, mime }]
+  })
+  return file
+}
+
+export function appendSessionAudio(id: string, file: string, data: ArrayBuffer): void {
+  if (!AUDIO_FILE.test(file)) throw new Error('Nome de arquivo de áudio inválido')
+  appendFileSync(join(sessionAudioDir(id), file), Buffer.from(data))
+}
+
+/** Fecha a parte: grava a versão WAV 16 kHz (usada pelo Gemini) e a duração. */
+export function finishSessionAudio(id: string, file: string, wavData?: ArrayBuffer, durationMs?: number): void {
+  if (!AUDIO_FILE.test(file)) throw new Error('Nome de arquivo de áudio inválido')
   let wav: string | undefined
   if (wavData && wavData.byteLength > 1000) {
-    wav = `${speaker}-${startedAt}.wav`
+    wav = file.replace(/\.\w+$/, '.wav')
     writeFileSync(join(sessionAudioDir(id), wav), Buffer.from(wavData))
   }
   updateSession(id, (s) => {
-    s.audio = [...(s.audio ?? []).filter((a) => a.file !== file), { file, wav, speaker, startedAt, mime }]
+    s.audio = (s.audio ?? []).map((a) => (a.file === file ? { ...a, wav: wav ?? a.wav, durationMs: durationMs ?? a.durationMs } : a))
+  })
+}
+
+/** Remove da sessão partes cujo arquivo ficou vazio (ex.: o app fechou no mesmo segundo em que a parte começou). */
+export function dropEmptyAudio(id: string): void {
+  const dir = sessionAudioDir(id)
+  updateSession(id, (s) => {
+    s.audio = (s.audio ?? []).filter((a) => (statSync(join(dir, a.file), { throwIfNoEntry: false })?.size ?? 0) > 2000)
   })
 }
 
@@ -220,16 +252,28 @@ export function saveSessionAudio(id: string, speaker: 'me' | 'them', startedAt: 
  * Fecha sessões que ficaram "em andamento" porque o app foi encerrado com a escuta ligada.
  * O fim passa a ser a última fala registrada (ou o início, se não houve fala).
  */
-export function closeOrphanSessions(exceptId?: string): number {
-  let closed = 0
+export function closeOrphanSessions(exceptId?: string): string[] {
+  const closed: string[] = []
   for (const f of readdirSync(sessionsDir()).filter((x) => x.endsWith('.json'))) {
     const s = readJson<Session | null>(join(sessionsDir(), f), null)
     if (!s || s.endedAt || s.id === exceptId) continue
-    s.endedAt = s.transcript.at(-1)?.at ?? s.startedAt
+    const lastAudio = Math.max(0, ...(s.audio ?? []).map((a) => a.startedAt))
+    s.endedAt = Math.max(s.transcript.at(-1)?.at ?? s.startedAt, lastAudio)
     saveSession(s)
-    closed++
+    closed.push(s.id)
   }
   return closed
+}
+
+/** Sessões recentes com áudio gravado que nunca foram revisadas (ex.: a revisão travou ou o app fechou). */
+export function sessionsPendingReview(maxAgeDays = 14): string[] {
+  const since = Date.now() - maxAgeDays * 86_400_000
+  return readdirSync(sessionsDir())
+    .filter((x) => x.endsWith('.json'))
+    .map((f) => readJson<Session | null>(join(sessionsDir(), f), null))
+    .filter((s): s is Session => !!s && !!s.endedAt && s.startedAt > since && !s.finalized && !s.finalState && !!s.audio?.length)
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map((s) => s.id)
 }
 
 /** Remove sessões vazias (sem fala e sem perguntas) criadas por engano. */

@@ -6,6 +6,7 @@ import {
   type ProviderId,
   type ShortcutName,
   type ShortcutStatus,
+  type FinalizeStatus,
   type KeyStatus,
   type Mode,
   type PermissionsStatus,
@@ -224,14 +225,54 @@ function HomePage({ go }: { go: (r: Route) => void }) {
 }
 
 // ---------------- Histórico ----------------
+/** Situação da revisão da transcrição (feita a partir do áudio completo). */
+function ReviewNotice({ session, status }: { session: Session; status?: FinalizeStatus }) {
+  if (!session.audio?.length) return null
+  const retry = (
+    <button className="ghost xs" onClick={() => void window.lumen.sessions.refinalize(session.id)}>
+      Tentar de novo
+    </button>
+  )
+  if (status?.state === 'running')
+    return <div className="notice-line">Revisando a transcrição a partir do áudio ({status.done}/{status.total})… Pode continuar usando o Lumen.</div>
+  if (session.finalState === 'failed' || (!session.finalized && status?.state === 'failed'))
+    return (
+      <div className="notice-line warn">
+        A revisão não foi concluída ({session.finalError ?? status?.error ?? 'erro desconhecido'}). A transcrição ao vivo está salva. {retry}
+      </div>
+    )
+  if (session.finalState === 'partial')
+    return (
+      <div className="notice-line">
+        Alguns trechos não puderam ser revisados e ficaram com a transcrição ao vivo ({session.finalError}). {retry}
+      </div>
+    )
+  if (!session.finalized)
+    return (
+      <div className="notice-line">
+        Esta transcrição é a versão ao vivo; dá para revisá-la a partir do áudio completo (mais fiel, com quem falou).{' '}
+        <button className="primary xs" onClick={() => void window.lumen.sessions.refinalize(session.id)}>
+          Revisar agora
+        </button>
+      </div>
+    )
+  return null
+}
+
 function HistoryPage() {
   const [list, setList] = useState<SessionMeta[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<'summary' | 'answers' | 'transcript'>('summary')
-  const [refinalizing, setRefinalizing] = useState(false)
+  const [review, setReview] = useState<Record<string, FinalizeStatus>>({})
   const summary = useAsk()
+
+  // Andamento da revisão da transcrição (roda em segundo plano no processo principal).
+  useEffect(() => {
+    void window.lumen.sessions.finalizeStatus().then((l) => setReview(Object.fromEntries(l.map((x) => [x.sessionId, x]))))
+    return window.lumen.sessions.onFinalize((p) => setReview((r) => ({ ...r, [p.sessionId]: p })))
+  }, [])
 
   useEffect(() => {
     const load = () =>
@@ -287,16 +328,14 @@ function HistoryPage() {
                 {!!session.audio?.length && (
                   <button
                     className="ghost sm"
-                    disabled={refinalizing}
-                    title="Transcreve de novo todo o áudio gravado, com o modelo mais preciso"
-                    onClick={async () => {
-                      setRefinalizing(true)
-                      const r = await window.lumen.sessions.refinalize(session.id)
-                      setRefinalizing(false)
-                      if (!r.ok && r.error) alert(r.error)
+                    disabled={review[session.id]?.state === 'running'}
+                    title="Transcreve de novo todo o áudio gravado, do zero, com o modelo mais preciso"
+                    onClick={() => {
+                      if (confirm('Refazer a transcrição inteira a partir do áudio? Os nomes dados a quem falou podem mudar.'))
+                        void window.lumen.sessions.refinalize(session.id, true)
                     }}
                   >
-                    <Icon name="refresh" size={14} /> {refinalizing ? 'Transcrevendo…' : 'Refazer transcrição'}
+                    <Icon name="refresh" size={14} /> Refazer transcrição
                   </button>
                 )}
                 <button className="ghost sm" onClick={() => void window.lumen.sessions.exportMd(session.id)}>
@@ -320,6 +359,7 @@ function HistoryPage() {
               {session.messages.filter((m) => m.role === 'assistant').length} respostas
               {session.finalized ? (session.finalEngine === 'gemini' ? ' · revisada pelo Gemini, com identificação de quem fala' : ' · revisada do áudio completo') : ''}
             </p>
+            <ReviewNotice session={session} status={review[session.id]} />
 
             <div className="tabs">
               {(['summary', 'answers', 'transcript'] as const).map((t) => (
@@ -336,6 +376,7 @@ function HistoryPage() {
                 ) : (
                   <p className="muted">Ainda não há resumo desta sessão.</p>
                 )}
+                {summary.state.notice && <p className="muted small">{summary.state.notice}</p>}
                 {summary.state.status === 'error' && <div className="error">{summary.state.error}</div>}
                 <button
                   className="primary sm"

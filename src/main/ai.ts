@@ -263,6 +263,8 @@ async function runProvider(provider: ProviderId, o: StreamOptions): Promise<void
 
 export interface PromptBudget {
   transcriptChars: number
+  /** Quanto da transcrição cabe de uma vez para resumos e perguntas sobre a reunião inteira. */
+  fullTranscriptChars: number
   docsChars: number
   historyTurns: number
   historyChars: number
@@ -276,13 +278,16 @@ export interface PromptBudget {
  */
 export function promptBudget(provider: ProviderId = safeProvider(), withImage = false): PromptBudget {
   if (provider !== 'ollama') {
-    return { transcriptChars: 12_000, docsChars: 60_000, historyTurns: 8, historyChars: 4000, imageMaxSide: 1600 }
+    // Gemini, Claude e OpenAI leem centenas de milhares de tokens; a Groq grátis limita tokens por minuto.
+    const full = provider === 'groq' ? 14_000 : provider === 'openai' ? 250_000 : 400_000
+    return { transcriptChars: 12_000, fullTranscriptChars: full, docsChars: 60_000, historyTurns: 8, historyChars: 4000, imageMaxSide: 1600 }
   }
   const ctx = getSettings().ollamaContext
   const reserved = 1024 /* resposta */ + 600 /* instruções */ + (withImage ? 1300 : 0)
   const chars = Math.max(1500, (ctx - reserved) * 3)
   return {
     transcriptChars: Math.round(chars * 0.5),
+    fullTranscriptChars: Math.round(chars * 0.75),
     docsChars: Math.round(chars * 0.3),
     historyTurns: 4,
     historyChars: Math.round(chars * 0.2 / 4),

@@ -3,6 +3,7 @@ import type {
   AiChunk,
   AiDone,
   AskRequest,
+  FinalizeStatus,
   KeyStatus,
   Mode,
   PermissionKind,
@@ -58,7 +59,10 @@ const api = {
     openOnboarding: () => ipcRenderer.send('onboarding:open'),
     onNav: (cb: (route: string) => void) => on('nav', cb)
   },
+  log: (message: string) => ipcRenderer.send('log', message),
   bar: {
+    /** Informa o estado da gravação ao processo principal (cronômetro na barra de menus). */
+    recState: (p: { status: string; elapsed: number; sessionId?: string }) => ipcRenderer.send('rec:state', p),
     resize: (h: number) => ipcRenderer.send('bar:resize', h),
     hide: () => ipcRenderer.send('bar:hide'),
     focus: () => ipcRenderer.send('bar:focus'),
@@ -93,12 +97,18 @@ const api = {
   sessions: {
     start: (modeId: string): Promise<Session> => ipcRenderer.invoke('session:start', modeId),
     stop: (id: string, finalize = true): Promise<Session | undefined> => ipcRenderer.invoke('session:stop', id, finalize),
-    saveAudio: (p: { sessionId: string; speaker: Speaker; startedAt: number; mime: string; audio: ArrayBuffer; wav?: ArrayBuffer }): Promise<void> =>
-      ipcRenderer.invoke('session:saveAudio', p),
+    audioBegin: (p: { sessionId: string; speaker: Speaker; startedAt: number; mime: string }): Promise<string> =>
+      ipcRenderer.invoke('session:audioBegin', p),
+    audioAppend: (sessionId: string, file: string, data: ArrayBuffer): Promise<void> =>
+      ipcRenderer.invoke('session:audioAppend', sessionId, file, data),
+    audioFinish: (sessionId: string, file: string, wav: ArrayBuffer | undefined, durationMs: number): Promise<void> =>
+      ipcRenderer.invoke('session:audioFinish', sessionId, file, wav, durationMs),
     renameSpeaker: (id: string, label: string, name: string): Promise<void> => ipcRenderer.invoke('session:renameSpeaker', id, label, name),
-    refinalize: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('session:refinalize', id),
-    onFinalizeProgress: (cb: (p: { done: number; total: number }) => void) => on('session:finalize-progress', cb),
-    onFinalized: (cb: (p: { sessionId: string; ok: boolean; error?: string }) => void) => on('session:finalized', cb),
+    /** Refaz a transcrição a partir do áudio; `force` refaz também as partes já revisadas. */
+    refinalize: (id: string, force = false): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('session:refinalize', id, force),
+    summarize: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('session:summarize', id),
+    finalizeStatus: (): Promise<FinalizeStatus[]> => ipcRenderer.invoke('session:finalizeStatus'),
+    onFinalize: (cb: (p: FinalizeStatus) => void) => on('session:finalize', cb),
     list: (): Promise<SessionMeta[]> => ipcRenderer.invoke('session:list'),
     get: (id: string): Promise<Session | undefined> => ipcRenderer.invoke('session:get', id),
     rename: (id: string, title: string): Promise<void> => ipcRenderer.invoke('session:rename', id, title),

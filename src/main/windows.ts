@@ -5,6 +5,14 @@ let bar: BrowserWindow | null = null
 let main: BrowserWindow | null = null
 let onboarding: BrowserWindow | null = null
 let quitting = false
+/** true quando o próprio usuário ocultou a barra (aí ela não reaparece sozinha). */
+let hiddenByUser = false
+let barCreated: ((w: BrowserWindow) => void) | null = null
+
+/** Chamado toda vez que a barra é criada (inclusive quando é recriada depois de cair). */
+export function onBarCreated(fn: (w: BrowserWindow) => void): void {
+  barCreated = fn
+}
 
 /** Marca que o app está encerrando: nenhuma janela deve ser reaberta a partir daqui. */
 export function setQuitting(): void {
@@ -61,13 +69,18 @@ export function createBar(showOnReady: boolean): BrowserWindow {
     title: 'Lumen',
     webPreferences: { preload: preload(), backgroundThrottling: false, sandbox: false }
   })
-  bar.setAlwaysOnTop(true, 'floating')
+  // Nível "screen-saver": fica acima de apps em tela cheia e de janelas flutuantes de chamadas.
+  bar.setAlwaysOnTop(true, 'screen-saver')
   bar.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   externalLinks(bar)
   load(bar, 'bar')
-  if (showOnReady) bar.once('ready-to-show', () => bar?.showInactive())
-  bar.on('closed', () => (bar = null))
-  return bar
+  const w = bar
+  if (showOnReady) w.once('ready-to-show', () => !w.isDestroyed() && w.showInactive())
+  w.on('closed', () => {
+    if (bar === w) bar = null
+  })
+  barCreated?.(w)
+  return w
 }
 
 export function getBar(): BrowserWindow | null {
@@ -86,11 +99,35 @@ export function toggleBar(force?: boolean): void {
   if (quitting) return
   const b = getBar() ?? createBar(false)
   const show = force ?? !b.isVisible()
+  hiddenByUser = !show
   if (show) {
     b.setOpacity(1) // garante que a barra nunca fique invisível
     b.showInactive()
     b.webContents.send('bar:shown')
   } else b.hide()
+}
+
+/**
+ * Durante a gravação: mantém a barra acima das outras janelas e, se ela sumiu sem o usuário pedir
+ * (outro app por cima, troca de tela cheia, monitor desconectado), traz de volta.
+ */
+export function keepBarOnTop(): void {
+  const b = getBar()
+  if (!b || quitting) return
+  b.setAlwaysOnTop(true, 'screen-saver')
+  if (hiddenByUser) return
+  if (!b.isVisible()) b.showInactive()
+  if (b.getOpacity() < 1) b.setOpacity(1)
+  // Se o monitor onde ela estava saiu, volta para a tela principal.
+  const [x, y] = b.getPosition()
+  const visible = screen.getAllDisplays().some((d) => {
+    const a = d.workArea
+    return x + 40 > a.x && x < a.x + a.width - 40 && y + 10 > a.y && y < a.y + a.height - 10
+  })
+  if (!visible) {
+    const { workArea } = screen.getPrimaryDisplay()
+    b.setPosition(Math.round(workArea.x + (workArea.width - BAR_WIDTH) / 2), workArea.y + 16)
+  }
 }
 
 export function focusBar(): void {

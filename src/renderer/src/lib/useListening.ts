@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, TranscriptLine } from '@shared/types'
-import { toWav16k } from './wav'
-import { ArchiveRecorder, micStream, SpeechChunker, stopStream, systemAudioStream, type ArchivePart, type Chunk } from './recorder'
+import { ArchiveRecorder, micStream, SpeechChunker, stopStream, systemAudioStream, type ArchiveSink, type Chunk } from './recorder'
 
 export type RecStatus = 'idle' | 'starting' | 'recording' | 'paused' | 'finalizing'
 
@@ -16,7 +15,6 @@ export interface ListeningState {
   notice?: string
   /** Tempo gravado (não conta as pausas). */
   elapsed: number
-  finalize?: { done: number; total: number }
   /** Sessão que acabou de ser salva (para os botões "Ver sessão" / "Resumo"). */
   savedSessionId?: string
 }
@@ -83,20 +81,13 @@ export function useListening(threshold: number, autoStopMinutes = 10) {
     })
   }, [])
 
-  const onArchive = useCallback(async (p: ArchivePart) => {
-    const session = sessionRef.current
-    if (!session) return
-    // WAV 16 kHz para a transcrição final com identificação de quem fala (Gemini).
-    const wav = await toWav16k(p.blob).catch(() => undefined)
-    await window.lumen.sessions.saveAudio({
-      sessionId: session.id,
-      speaker: p.speaker,
-      startedAt: p.startedAt,
-      mime: p.mime,
-      audio: await p.blob.arrayBuffer(),
-      wav
-    })
-  }, [])
+  /** Destino do áudio completo: cada segundo vai para o disco, na pasta da sessão. */
+  const sinkFor = useCallback((sessionId: string): ArchiveSink => ({
+    begin: (p) => window.lumen.sessions.audioBegin({ sessionId, ...p }),
+    append: (file, data) => window.lumen.sessions.audioAppend(sessionId, file, data),
+    finish: (file, wav, durationMs) => window.lumen.sessions.audioFinish(sessionId, file, wav, durationMs),
+    log: (m) => window.lumen.log(m)
+  }), [])
 
   /** Fecha tudo o que está capturando áudio. Sempre seguro de chamar. */
   const releaseCapture = useCallback(async () => {
@@ -120,7 +111,8 @@ export function useListening(threshold: number, autoStopMinutes = 10) {
       const micChunker = new SpeechChunker(mic, 'me', threshold, onChunk)
       micChunker.start()
       chunkers.current.push(micChunker)
-      const micArchive = new ArchiveRecorder(mic, 'me', onArchive)
+      const sink = sinkFor(sessionRef.current!.id)
+      const micArchive = new ArchiveRecorder(mic, 'me', sink)
       micArchive.start()
       archives.current.push(micArchive)
       runStartedAt.current = Date.now()
@@ -135,7 +127,7 @@ export function useListening(threshold: number, autoStopMinutes = 10) {
           const sysChunker = new SpeechChunker(sys, 'them', threshold * 0.7, onChunk)
           sysChunker.start()
           chunkers.current.push(sysChunker)
-          const sysArchive = new ArchiveRecorder(sys, 'them', onArchive)
+          const sysArchive = new ArchiveRecorder(sys, 'them', sink)
           sysArchive.start()
           archives.current.push(sysArchive)
           setState((s) => ({ ...s, systemAudio: 'on' }))
@@ -144,7 +136,7 @@ export function useListening(threshold: number, autoStopMinutes = 10) {
           if (token === runToken.current) setState((s) => ({ ...s, systemAudio: 'failed' }))
         })
     },
-    [threshold, onChunk, onArchive]
+    [threshold, onChunk, sinkFor]
   )
 
   /** ▶ Play: começa uma gravação nova ou continua a pausada. */
@@ -204,29 +196,37 @@ export function useListening(threshold: number, autoStopMinutes = 10) {
       runToken.current++
       if (runStartedAt.current) recordedMs.current += Date.now() - runStartedAt.current
       runStartedAt.current = 0
-      setStatus('finalizing', { micLevel: 0, sysLevel: 0, systemAudio: 'off', notice: reason, finalize: { done: 0, total: 0 } })
+      // "Salvando…" dura só o tempo de fechar os arquivos (segundos). A revisão da transcrição
+      // roda depois, em segundo plano, sem prender a barra.
+      setStatus('finalizing', { micLevel: 0, sysLevel: 0, systemAudio: 'off', notice: reason })
       await releaseCapture()
-      await queue.current
+      // Espera as últimas falas ao vivo, mas nunca fica preso numa transcrição que não responde.
+      await Promise.race([queue.current, new Promise((r) => setTimeout(r, 15_000))])
       try {
         await window.lumen.sessions.stop(session.id, true)
       } catch (e) {
         setState((s) => ({ ...s, error: cleanIpcError(e) }))
       }
       sessionRef.current = null
-      setStatus('idle', { session: null, finalize: undefined, savedSessionId: session.id })
+      setStatus('idle', { session: null, savedSessionId: session.id })
       return session
     },
     [releaseCapture]
   )
 
-  // Progresso da transcrição final.
-  useEffect(
-    () =>
-      window.lumen.sessions.onFinalizeProgress((p) => {
-        if (statusRef.current === 'finalizing') setState((s) => ({ ...s, finalize: p }))
-      }),
-    []
-  )
+  // Informa o processo principal (cronômetro e controles na barra de menus, recuperação se a barra cair).
+  useEffect(() => {
+    const report = () =>
+      window.lumen.bar.recState({
+        status: statusRef.current,
+        elapsed: recordedMs.current + (runStartedAt.current ? Date.now() - runStartedAt.current : 0),
+        sessionId: sessionRef.current?.id
+      })
+    report()
+    if (state.status !== 'recording') return
+    const id = window.setInterval(report, 1000)
+    return () => clearInterval(id)
+  }, [state.status])
 
   // Medidores, cronômetro e parada automática por silêncio.
   useEffect(() => {

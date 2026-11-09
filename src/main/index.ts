@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, shell, Tray } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -18,9 +18,12 @@ import { grabSelection, pasteText } from './selection'
 import * as store from './store'
 import { transcribeChunk } from './transcribe'
 import { echoesOf, isEcho } from './transcript'
-import { finalizeSession } from './finalize'
+import { finalizeSession, finalizeStatuses } from './finalize'
+import { captureConsole, log, logPath } from './log'
 import {
   allWindows,
+  keepBarOnTop,
+  onBarCreated,
   broadcast,
   closeOnboarding,
   createBar,
@@ -33,6 +36,8 @@ import {
   toggleBar
 } from './windows'
 
+captureConsole()
+
 // Precisa rodar antes do `ready`: habilita a captura do áudio do sistema via getDisplayMedia.
 initLoopback()
 
@@ -43,6 +48,101 @@ let tray: Tray | null = null
 const inflight = new Map<string, AbortController>()
 let listening = false
 let activeSessionId: string | null = null
+
+// ---------- Estado da gravação (vem da barra) ----------
+interface RecState {
+  status: 'idle' | 'starting' | 'recording' | 'paused' | 'finalizing'
+  elapsed: number
+  sessionId?: string
+}
+let recState: RecState = { status: 'idle', elapsed: 0 }
+
+const clock = (ms: number) => {
+  const t = Math.floor(ms / 1000)
+  const h = Math.floor(t / 3600)
+  const m = String(Math.floor((t % 3600) / 60)).padStart(2, '0')
+  const sec = String(t % 60).padStart(2, '0')
+  return h ? `${h}:${m}:${sec}` : `${m}:${sec}`
+}
+
+/** Na barra de menus do Mac, o cronômetro mostra que a gravação continua mesmo com a barra oculta. */
+function updateTrayTitle(): void {
+  if (!tray || process.platform !== 'darwin') return
+  const running = finalizeStatuses().find((f) => f.state === 'running')
+  const title =
+    recState.status === 'recording'
+      ? ` ● ${clock(recState.elapsed)}`
+      : recState.status === 'paused'
+        ? ` ❚❚ ${clock(recState.elapsed)}`
+        : running
+          ? ` Revisando ${running.done}/${running.total}`
+          : ' Lumen'
+  tray.setTitle(title)
+  tray.setToolTip(recState.status === 'recording' ? `Lumen · gravando ${clock(recState.elapsed)}` : 'Lumen')
+}
+
+/**
+ * Depois que a gravação termina: revisa a transcrição a partir do áudio, cria o título e o resumo.
+ * Tudo em segundo plano, com o progresso aparecendo na barra e no Histórico.
+ */
+async function afterRecording(id: string): Promise<void> {
+  try {
+    store.dropEmptyAudio(id)
+    if (store.getSession(id)?.audio?.length) {
+      const result = await finalizeSession(id, {
+        onStatus: (st) => {
+          broadcast('session:finalize', st)
+          updateTrayTitle()
+        }
+      })
+      log.info(`[finalize] ${id}: ${result.state} ${result.done}/${result.total}${result.error ? ` — ${result.error}` : ''}`)
+    }
+    store.pruneEmptySessions()
+    broadcast('sessions:changed')
+    updateTrayTitle()
+    await autoTitle(id)
+    broadcast('sessions:changed')
+    const s = store.getSession(id)
+    // Resumo automático da reunião inteira (só quando há conversa suficiente e ainda não há resumo).
+    if (s && !s.summary && s.transcript.length >= 10) {
+      await runAsk({ requestId: randomUUID(), kind: 'summary', sessionId: id }, { signal: AbortSignal.timeout(600_000), onText: () => {} }).catch(
+        (e) => log.warn('[summary] resumo automático falhou:', (e as Error).message)
+      )
+      broadcast('sessions:changed')
+    }
+  } catch (e) {
+    log.error('[afterRecording]', e)
+  } finally {
+    updateTrayTitle()
+  }
+}
+
+/**
+ * Se a barra (que é quem grava) travar ou fechar no meio da gravação, a sessão é encerrada com o
+ * áudio que já está no disco, a revisão roda e a barra volta.
+ */
+function watchBar(win: BrowserWindow): void {
+  win.webContents.on('render-process-gone', (_e, details) => {
+    log.error(`[barra] processo da barra caiu: ${details.reason} (${details.exitCode})`)
+    const id = activeSessionId ?? recState.sessionId
+    const wasRecording = recState.status === 'recording' || recState.status === 'paused'
+    recState = { status: 'idle', elapsed: 0 }
+    listening = false
+    activeSessionId = null
+    refreshTray()
+    updateTrayTitle()
+    if (id && wasRecording) {
+      store.updateSession(id, (x) => (x.endedAt ??= Date.now()))
+      void afterRecording(id)
+      if (Notification.isSupported())
+        new Notification({ title: 'Lumen', body: 'A barra reiniciou. A gravação até agora foi salva e está sendo revisada.' }).show()
+    }
+    if (!win.isDestroyed()) win.destroy()
+    setTimeout(() => createBar(true), 500)
+  })
+  win.on('unresponsive', () => log.warn('[barra] janela sem responder'))
+  win.on('responsive', () => log.info('[barra] janela voltou a responder'))
+}
 
 // ---------- Atalhos globais ----------
 let shortcutStatus: ShortcutStatus[] = []
@@ -110,6 +210,7 @@ function buildTray(): void {
   tray = new Tray(icon)
   // No macOS, o nome ao lado do ícone deixa o Lumen fácil de achar na barra de menus.
   if (process.platform === 'darwin') tray.setTitle(icon.isEmpty() ? '◉ Lumen' : ' Lumen')
+  updateTrayTitle()
   tray.setToolTip('Lumen')
   // No Windows, clicar no ícone da bandeja mostra/esconde a barra; o menu fica no botão direito.
   if (process.platform === 'win32') tray.on('click', () => toggleBar())
@@ -139,11 +240,23 @@ function applyLoginItem(openAtLogin: boolean): void {
 function refreshTray(): void {
   if (!tray) return
   const menu = Menu.buildFromTemplate([
-    { label: listening ? '● Ouvindo' : 'Lumen', enabled: false },
+    {
+      label:
+        recState.status === 'recording'
+          ? `● Gravando (${clock(recState.elapsed)})`
+          : recState.status === 'paused'
+            ? `❚❚ Gravação pausada (${clock(recState.elapsed)})`
+            : 'Lumen',
+      enabled: false
+    },
     { type: 'separator' },
     { label: 'Mostrar/ocultar barra', accelerator: accelOf('toggle-bar'), click: () => toggleBar() },
-    { label: listening ? 'Pausar/continuar gravação' : 'Gravar', accelerator: accelOf('toggle-listen'), click: () => void onShortcut('toggle-listen') },
-    ...(listening
+    {
+      label: recState.status === 'recording' ? 'Pausar gravação' : recState.status === 'paused' ? 'Continuar gravação' : 'Gravar',
+      accelerator: accelOf('toggle-listen'),
+      click: () => void onShortcut('toggle-listen')
+    },
+    ...(listening || recState.status === 'recording' || recState.status === 'paused'
       ? [{ label: 'Parar e salvar gravação', click: () => getBar()?.webContents.send('listen:command', 'stop') }]
       : []),
     { label: 'Perguntar sobre a tela', accelerator: accelOf('ask-screen'), click: () => void onShortcut('ask-screen') },
@@ -154,6 +267,7 @@ function refreshTray(): void {
     { label: 'Histórico', click: () => openMain('history') },
     { label: 'Configurações…', accelerator: 'CommandOrControl+,', click: () => openMain('settings') },
     { label: 'Permissões…', click: () => openOnboarding() },
+    { label: 'Abrir registro de diagnóstico', click: () => void shell.openPath(logPath() ?? '') },
     { type: 'separator' },
     {
       label: process.platform === 'darwin' ? 'Abrir ao iniciar o Mac' : 'Abrir ao iniciar o computador',
@@ -296,6 +410,16 @@ function registerIpc(): void {
   ipcMain.handle('shortcuts:pause', () => globalShortcut.unregisterAll())
   ipcMain.handle('shortcuts:resume', () => registerShortcuts())
 
+  // Registro em arquivo e estado da gravação vindo da barra
+  ipcMain.on('log', (_e, message: string) => log.warn('[barra]', String(message).slice(0, 2000)))
+  ipcMain.on('rec:state', (_e, p: { status: RecState['status']; elapsed: number; sessionId?: string }) => {
+    const changed = p.status !== recState.status
+    recState = p
+    if (changed) log.info(`[rec] ${p.status}`)
+    updateTrayTitle()
+    if (changed) refreshTray()
+  })
+
   // Janelas
   ipcMain.on('bar:resize', (_e, h: number) => resizeBar(h))
   ipcMain.on('bar:hide', () => toggleBar(false))
@@ -314,25 +438,37 @@ function registerIpc(): void {
     broadcast('sessions:changed')
     return s
   })
-  ipcMain.handle('session:stop', async (_e, id: string, finalize = true) => {
+  ipcMain.handle('session:stop', (_e, id: string, finalize = true) => {
     const s = store.updateSession(id, (x) => (x.endedAt = Date.now()))
     if (activeSessionId === id) activeSessionId = null
     listening = false
+    recState = { status: 'idle', elapsed: 0 }
     refreshTray()
     broadcast('sessions:changed')
-    if (finalize && s?.audio?.length) {
-      // Transcrição final a partir do áudio completo (mais fiel que a ao vivo).
-      const result = await finalizeSession(id, (p) => broadcast('session:finalize-progress', p))
-      if (!result.ok) console.warn('[lumen] transcrição final não concluída:', result.error)
-      broadcast('session:finalized', { sessionId: id, ...result })
-    }
-    store.pruneEmptySessions()
-    broadcast('sessions:changed')
-    void autoTitle(id).then(() => broadcast('sessions:changed'))
+    log.info(`[session] ${id} encerrada (${s?.transcript.length ?? 0} falas ao vivo, ${s?.audio?.length ?? 0} partes de áudio)`)
+    // A revisão roda em segundo plano: a barra fica livre na hora.
+    if (finalize) void afterRecording(id)
+    else store.pruneEmptySessions()
     return store.getSession(id)
   })
-  ipcMain.handle('session:saveAudio', (_e, p: { sessionId: string; speaker: Speaker; startedAt: number; mime: string; audio: ArrayBuffer; wav?: ArrayBuffer }) => {
-    store.saveSessionAudio(p.sessionId, p.speaker, p.startedAt, p.mime, p.audio, p.wav)
+  ipcMain.handle('session:audioBegin', (_e, p: { sessionId: string; speaker: Speaker; startedAt: number; mime: string }) =>
+    store.beginSessionAudio(p.sessionId, p.speaker, p.startedAt, p.mime)
+  )
+  ipcMain.handle('session:audioAppend', (_e, sessionId: string, file: string, data: ArrayBuffer) =>
+    store.appendSessionAudio(sessionId, file, data)
+  )
+  ipcMain.handle('session:audioFinish', (_e, sessionId: string, file: string, wav: ArrayBuffer | undefined, durationMs: number) =>
+    store.finishSessionAudio(sessionId, file, wav, durationMs)
+  )
+  ipcMain.handle('session:finalizeStatus', () => finalizeStatuses())
+  ipcMain.handle('session:summarize', async (_e, id: string) => {
+    try {
+      await runAsk({ requestId: randomUUID(), kind: 'summary', sessionId: id }, { signal: AbortSignal.timeout(600_000), onText: () => {} })
+      broadcast('sessions:changed')
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: humanizeError(err).message }
+    }
   })
   ipcMain.handle('session:renameSpeaker', (_e, id: string, label: string, name: string) => {
     store.updateSession(id, (s) => {
@@ -341,10 +477,10 @@ function registerIpc(): void {
     })
     broadcast('sessions:changed')
   })
-  ipcMain.handle('session:refinalize', async (_e, id: string) => {
-    const result = await finalizeSession(id, (p) => broadcast('session:finalize-progress', p))
+  ipcMain.handle('session:refinalize', async (_e, id: string, force = false) => {
+    const result = await finalizeSession(id, { force, onStatus: (st) => broadcast('session:finalize', st) })
     broadcast('sessions:changed')
-    return result
+    return { ok: result.state === 'done' || result.state === 'partial', error: result.error }
   })
   ipcMain.handle('session:list', () => store.listSessions())
   ipcMain.handle('session:get', (_e, id: string) => store.getSession(id))
@@ -384,12 +520,12 @@ function registerIpc(): void {
     let dropped = false
     store.updateSession(p.sessionId, (s) => {
       const recent = s.transcript.slice(-12)
-      if (isEcho(line, recent)) {
+      if (isEcho(line, recent, 25_000)) {
         dropped = true // eco dos alto-falantes captado pelo microfone
         return
       }
       if (line.speaker === 'them') {
-        removed = echoesOf(line, recent)
+        removed = echoesOf(line, recent, 25_000)
         if (removed.length) s.transcript = s.transcript.filter((l) => !removed.includes(l.id))
       }
       s.transcript.push(line)
@@ -462,7 +598,9 @@ app.on('second-instance', () => openMain('home'))
 
 app.whenReady().then(() => {
   store.ensureDirs()
-  store.closeOrphanSessions()
+  log.info(`[app] Lumen ${app.getVersion()} iniciado (${process.platform}); log em ${logPath()}`)
+  // Sessões que ficaram abertas (app fechou ou travou gravando): encerra e revisa com o áudio salvo.
+  const orphans = store.closeOrphanSessions()
   store.pruneEmptySessions()
   if (process.platform === 'darwin') app.dock?.setIcon(resource('icon.png'))
   applyDock()
@@ -473,7 +611,17 @@ app.whenReady().then(() => {
 
   const settings = store.getSettings()
   const startedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin || process.argv.includes('--hidden')
+  onBarCreated(watchBar)
   createBar(settings.onboardingDone && !settings.launchHidden && !startedAtLogin)
+  // Revisa (uma de cada vez) as gravações que ficaram sem revisão: sessões interrompidas e revisões que não terminaram.
+  const pending = [...new Set([...orphans, ...store.sessionsPendingReview()])].filter((id) => store.getSession(id)?.audio?.length)
+  if (pending.length) log.info(`[app] ${pending.length} sessão(ões) aguardando revisão: ${pending.join(', ')}`)
+  void pending.reduce((chain, id) => chain.then(() => afterRecording(id)), Promise.resolve())
+
+  // Enquanto grava, a barra fica acima de tudo (inclusive de apps em tela cheia, como a chamada).
+  setInterval(() => {
+    if (recState.status === 'recording' || recState.status === 'paused') keepBarOnTop()
+  }, 5000)
   if (!settings.onboardingDone) openOnboarding()
   else if (!startedAtLogin) openMain('home')
 

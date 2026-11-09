@@ -96,6 +96,9 @@ export interface Session {
   speakerNames?: Record<string, string>
   /** Motor usado na transcrição final. */
   finalEngine?: 'gemini' | 'whisper'
+  /** Resultado da última revisão: tudo revisado, parte revisada ou falhou (com o motivo). */
+  finalState?: 'done' | 'partial' | 'failed'
+  finalError?: string
 }
 
 export interface AudioPart {
@@ -104,6 +107,18 @@ export interface AudioPart {
   speaker: Speaker
   startedAt: number
   mime: string
+  durationMs?: number
+}
+
+/** Situação da transcrição final (feita a partir do áudio completo, em segundo plano). */
+export interface FinalizeStatus {
+  sessionId: string
+  state: 'running' | 'done' | 'partial' | 'failed'
+  done: number
+  total: number
+  /** Partes em que a revisão falhou e ficou valendo a transcrição ao vivo. */
+  fallbackParts?: number
+  error?: string
 }
 
 export type SessionMeta = Pick<Session, 'id' | 'title' | 'modeId' | 'startedAt' | 'endedAt'> & {

@@ -2,7 +2,7 @@
 
 **Copiloto de IA para desktop.** É uma barra flutuante que fica sobre qualquer app: ouve a conversa, lê a tela quando você pede, sugere o que responder, age sobre o texto selecionado e guarda cada sessão com a transcrição revisada e um resumo.
 
-`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.2.0
+`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.2.3
 
 <!-- TODO: adicionar um GIF da barra em uso (docs/demo.gif) -->
 
@@ -58,6 +58,8 @@ Projeto autoral, escrito do zero a partir de uma lista de funcionalidades observ
 - **Tolerância a falhas nos provedores.** Detecta modelo aposentado (404) e troca para o mais novo, faz até 3 tentativas em 429/5xx e, se o provedor principal continuar fora, usa outro com chave configurada.
 - **Ollama pela API nativa** (`/api/chat`), porque só ela aceita `num_ctx`, `keep_alive` e `think`. Há também um orçamento de contexto calculado por memória disponível.
 - **Filtro de eco e de alucinação.** Remove falas do microfone que repetem o áudio dos alto-falantes e frases típicas que o Whisper inventa em silêncio.
+- **Gravação que não se perde.** Cada segundo de áudio vai direto para o disco, em partes de 5 minutos. Ao parar, a barra fica livre na hora e a revisão roda em segundo plano, parte por parte (Gemini → Whisper → trecho ao vivo), com limite de tempo em toda chamada e "Tentar de novo" só do que faltou. Ao abrir, o app revisa sozinho gravações que ficaram pela metade.
+- **Resumo da reunião inteira.** Quando a transcrição não cabe no modelo (ex.: Ollama), o resumo é feito em etapas: anota cada bloco e depois junta. Registro de diagnóstico em `~/Library/Logs/Lumen/main.log`.
 - **Sem módulos nativos.** Não usa SQLite nem node-gyp, então o build é o mesmo nos três sistemas.
 
 ## Provedores de IA

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { SELECTION_ACTIONS, type Mode, type SelectionAction, type Settings } from '@shared/types'
+import { SELECTION_ACTIONS, type FinalizeStatus, type Mode, type SelectionAction, type Settings } from '@shared/types'
 import { Markdown } from '@/components/Markdown'
 import { Icon } from '@/components/Icon'
 import { useAsk } from '@/lib/useAsk'
@@ -17,6 +17,14 @@ function Level({ value, label }: { value: number; label: string }) {
       ))}
     </span>
   )
+}
+
+function reviewText(r: FinalizeStatus | null): string {
+  if (!r) return ''
+  if (r.state === 'running') return r.total ? `Revisando a transcrição em segundo plano (${r.done}/${r.total})…` : 'Revisando a transcrição em segundo plano…'
+  if (r.state === 'done') return 'Transcrição revisada.'
+  if (r.state === 'partial') return `Transcrição revisada; ${r.fallbackParts} trecho(s) ficaram com a versão ao vivo.`
+  return `A revisão não foi concluída (${r.error ?? 'erro'}); a transcrição ao vivo está salva. Dá para tentar de novo no Histórico.`
 }
 
 export function Bar() {
@@ -145,6 +153,15 @@ export function Bar() {
     setTimeout(() => setCopied(false), 1200)
   }
 
+  // Revisão da transcrição (em segundo plano) da sessão que acabou de ser salva.
+  const [review, setReview] = useState<FinalizeStatus | null>(null)
+  const savedId = listening.state.savedSessionId
+  useEffect(() => window.lumen.sessions.onFinalize((p) => setReview((r) => (p.sessionId === savedId || r?.sessionId === p.sessionId ? p : r))), [savedId])
+  useEffect(() => {
+    if (!savedId) return setReview(null)
+    void window.lumen.sessions.finalizeStatus().then((list) => setReview(list.find((x) => x.sessionId === savedId) ?? null))
+  }, [savedId])
+
   const busy = answer.status === 'thinking' || answer.status === 'streaming'
   const showInput = panel === 'answer' || panel === 'selection' || (panel === 'transcript' && !recording)
 
@@ -162,10 +179,7 @@ export function Bar() {
               {rec === 'starting' && 'Iniciando…'}
               {rec === 'recording' && 'Gravando'}
               {rec === 'paused' && 'Pausado'}
-              {rec === 'finalizing' &&
-                (listening.state.finalize?.total
-                  ? `Revisando a transcrição ${listening.state.finalize.done}/${listening.state.finalize.total}…`
-                  : 'Salvando…')}
+              {rec === 'finalizing' && 'Salvando…'}
             </span>
             <span className="mono">{formatElapsed(listening.state.elapsed)}</span>
             {rec === 'recording' && (
@@ -249,8 +263,8 @@ export function Bar() {
       )}
 
       {listening.state.savedSessionId && rec === 'idle' && (
-        <div className="toast ok">
-          {listening.state.notice ?? 'Gravação salva com a transcrição revisada.'}
+        <div className={`toast ${review?.state === 'failed' ? 'warn' : 'ok'}`}>
+          {[listening.state.notice ?? 'Gravação salva.', reviewText(review)].filter(Boolean).join(' ')}
           <span className="row">
             <button className="ghost xs" onClick={() => (window.lumen.app.openMain('history'), listening.dismiss())}>
               Ver sessão
