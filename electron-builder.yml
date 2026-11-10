@@ -21,8 +21,8 @@ asarUnpack:
   - node_modules/sherpa-onnx-*/**
 mac:
   category: public.app-category.productivity
-  # Só o módulo de transcrição do próprio sistema vai no instalador.
-  files: ['!node_modules/sherpa-onnx-{win,linux}-*/**']
+  # A lista do sistema SUBSTITUI a geral: repete os arquivos do app e tira os módulos de outros sistemas.
+  files: ['out/**', 'package.json', 'resources/**', '!**/*.map', '!dist/**', '!releases/**', '!node_modules/sherpa-onnx-{win,linux}-*/**']
   target:
     - target: dmg
     - target: zip
@@ -47,7 +47,7 @@ dmg:
 
 # ---------- Windows: instalador de um clique (.exe) ----------
 win:
-  files: ['!node_modules/sherpa-onnx-{darwin,linux}-*/**']
+  files: ['out/**', 'package.json', 'resources/**', '!**/*.map', '!dist/**', '!releases/**', '!node_modules/sherpa-onnx-{darwin,linux}-*/**']
   target:
     - target: nsis
       arch: [x64]
@@ -71,7 +71,7 @@ nsis:
 # ---------- Linux: AppImage (roda direto) e .deb (Ubuntu/Debian) ----------
 linux:
   # Só o módulo de transcrição da arquitetura do instalador (x64 ou arm64).
-  files: ['!node_modules/sherpa-onnx-{darwin,win}-*/**', '!node_modules/sherpa-onnx-linux-!(${arch})/**']
+  files: ['out/**', 'package.json', 'resources/**', '!**/*.map', '!dist/**', '!releases/**', '!node_modules/sherpa-onnx-{darwin,win}-*/**', '!node_modules/sherpa-onnx-linux-!(${arch})/**']
   target:
     - target: AppImage
       arch: [x64]
