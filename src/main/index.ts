@@ -38,6 +38,7 @@ import {
 } from './windows'
 
 captureConsole()
+process.on('exit', (code) => log.info(`[app] processo saiu (código ${code})`))
 
 // Precisa rodar antes do `ready`: habilita a captura do áudio do sistema via getDisplayMedia.
 initLoopback()
@@ -612,6 +613,8 @@ app.on('second-instance', () => openMain('home'))
 
 app.whenReady().then(() => {
   store.ensureDirs()
+  // Abre as chaves já na abertura, sem travar o app se o macOS pedir a senha do Keychain.
+  const keysReady = store.warmKeys().catch((e) => log.warn('[app] chaves:', (e as Error).message))
   log.info(`[app] Lumen ${app.getVersion()} iniciado (${process.platform}); log em ${logPath()}`)
   // Sessões que ficaram abertas (app fechou ou travou gravando): encerra e revisa com o áudio salvo.
   const orphans = store.closeOrphanSessions()
@@ -633,7 +636,10 @@ app.whenReady().then(() => {
   // Só depois que a barra carregou: ler as chaves pode abrir o pedido de senha do Keychain, que
   // bloqueia o app até ser respondido — não pode acontecer enquanto a barra ainda está carregando.
   if (pending.length)
-    setTimeout(() => void pending.reduce((chain, id) => chain.then(() => afterRecording(id)), Promise.resolve()), 15_000)
+    setTimeout(
+      () => void keysReady.then(() => pending.reduce((chain, id) => chain.then(() => afterRecording(id)), Promise.resolve())),
+      15_000
+    )
 
   // Enquanto grava, a barra fica acima de tudo (inclusive de apps em tela cheia, como a chamada).
   setInterval(() => {
@@ -666,6 +672,7 @@ app.on('window-all-closed', () => {
 })
 // Encerramento de verdade: Dock → Encerrar, ⌘Q ou "Sair do Lumen" fecham tudo.
 app.on('before-quit', () => {
+  log.info('[app] encerrando', new Error('origem').stack?.split('\n').slice(1, 6).join(' | '))
   setQuitting()
   if (activeSessionId) store.updateSession(activeSessionId, (x) => (x.endedAt ??= Date.now()))
   globalShortcut.unregisterAll()

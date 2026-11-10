@@ -87,6 +87,24 @@ export function setKey(name: KeyName, value: string): KeyStatus {
 
 const keyCache = new Map<string, string>()
 
+/**
+ * Abre as chaves guardadas sem travar o app: no macOS, a primeira leitura depois de uma
+ * atualização pode pedir a senha do Keychain. Com a versão assíncrona, o app continua
+ * respondendo enquanto o pedido está aberto, e as leituras seguintes vêm da memória.
+ */
+export async function warmKeys(): Promise<void> {
+  if (!(await safeStorage.isAsyncEncryptionAvailable().catch(() => false))) return
+  for (const stored of Object.values(readJson<Record<string, string>>(keysFile(), {}))) {
+    if (!stored?.startsWith('enc:') || keyCache.has(stored)) continue
+    try {
+      const r = await safeStorage.decryptStringAsync(Buffer.from(stored.slice(4), 'base64'))
+      keyCache.set(stored, r.result)
+    } catch {
+      /* chave ilegível: getKey trata como ausente */
+    }
+  }
+}
+
 export function getKey(name: KeyName): string | undefined {
   const envName = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY' }[name]
   const stored = readJson<Record<string, string>>(keysFile(), {})[name]

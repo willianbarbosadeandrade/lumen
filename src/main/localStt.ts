@@ -113,14 +113,14 @@ function startWorker(): UtilityProcess {
     else p.reject(new Error(msg.error))
   })
   w.on('exit', (code) => {
-    if (code) log.warn(`[stt] processo de transcrição saiu (código ${code})`)
+    log.info(`[stt] processo de transcrição saiu (código ${code})`)
     for (const p of pending.values()) p.reject(new Error('o processo de transcrição local fechou'))
     pending.clear()
     if (worker === w) worker = null
   })
   worker = w
   const threads = Math.max(2, Math.min(8, cpus().length - 2))
-  void call('init', { init: { modelsDir: modelsDir(), threads } })
+  call('init', { init: { modelsDir: modelsDir(), threads } }).catch((e) => log.warn('[stt] init:', (e as Error).message))
   return w
 }
 
