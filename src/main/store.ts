@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoStopMinutes: 10,
   finalTranscriber: 'auto',
   transcriptionProvider: 'groq',
-  transcriptionLanguage: 'pt',
+  transcriptionLanguage: 'auto', // fixar um idioma faz o Whisper traduzir falas em outro idioma
   answerLanguage: 'Português do Brasil',
   activeModeId: 'general',
   autoSuggest: false,

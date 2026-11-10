@@ -42,6 +42,12 @@ process.on('exit', (code) => log.info(`[app] processo saiu (código ${code})`))
 
 // Precisa rodar antes do `ready`: habilita a captura do áudio do sistema via getDisplayMedia.
 initLoopback()
+// Linux com Wayland (Ubuntu): atalhos globais só funcionam pelo portal do sistema.
+// Soma à lista de recursos já ligados (o áudio do sistema também usa enable-features).
+if (process.platform === 'linux') {
+  const features = app.commandLine.getSwitchValue('enable-features')
+  app.commandLine.appendSwitch('enable-features', [features, 'GlobalShortcutsPortal'].filter(Boolean).join(','))
+}
 
 app.setName('Lumen')
 if (!app.requestSingleInstanceLock()) app.quit()
