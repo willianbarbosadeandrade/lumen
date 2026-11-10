@@ -2,7 +2,7 @@
 
 **Copiloto de IA para desktop.** É uma barra flutuante que fica sobre qualquer app: ouve a conversa, lê a tela quando você pede, sugere o que responder, age sobre o texto selecionado e guarda cada sessão com a transcrição revisada e um resumo.
 
-`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.3.3
+`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.3.4
 
 <!-- TODO: adicionar um GIF da barra em uso (docs/demo.gif) -->
 

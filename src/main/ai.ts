@@ -352,16 +352,23 @@ async function runWithRecovery(provider: ProviderId, o: StreamOptions, hasText: 
   }
 }
 
+/** Provedor que acabou de falhar por sobrecarga fica de lado por 2 min (vai direto para a reserva). */
+const cooldown = new Map<ProviderId, number>()
+
 export async function streamCompletion(o: StreamOptions): Promise<string> {
   let full = ''
   const wrapped = { ...o, onText: (d: string) => ((full += d), o.onText(d)) }
   const primary = activeProvider()
+  const backupOf = () => FALLBACK_ORDER.concat('gemini').find((p) => p !== primary && p !== 'ollama' && isConfigured(p))
+  const resting = (cooldown.get(primary) ?? 0) > Date.now() && backupOf()
   try {
+    if (resting) throw new TransientError(503, primary, 'em pausa após falhas recentes')
     await runWithRecovery(primary, wrapped, () => !!full)
   } catch (err) {
     if (!(err instanceof TransientError) || full || o.signal.aborted) throw err
+    if (!resting) cooldown.set(primary, Date.now() + 120_000)
     // Plano B: o provedor continua sobrecarregado; responde por outro que esteja configurado.
-    const backup = FALLBACK_ORDER.concat('gemini').find((p) => p !== primary && p !== 'ollama' && isConfigured(p))
+    const backup = backupOf()
     if (!backup) {
       throw new Error(`O ${err.provider} está sobrecarregado agora. Tentei 3 vezes; tente de novo em alguns segundos ou configure a Groq como reserva.`)
     }
