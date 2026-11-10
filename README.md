@@ -80,7 +80,7 @@ Requer Node 20+.
 npm install
 npm run dev          # desenvolvimento com recarga automática
 npm run typecheck    # checagem de tipos (roda antes de todo build)
-npm run app          # macOS: build, .dmg e instala em /Applications
+npm run app          # macOS: build (.dmg em ~/Library/Caches/Lumen-build, fora do iCloud) e instala em /Applications
 npm run dist:win     # Windows: instalador NSIS
 npm run dist:linux   # Linux: AppImage + .deb
 ```
