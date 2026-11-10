@@ -20,6 +20,8 @@ export interface StreamOptions {
   signal: AbortSignal
   onText: (delta: string) => void
   retried?: boolean
+  /** Tarefa em segundo plano (ex.: resumo): espera mais antes de desistir de um provedor sobrecarregado. */
+  patient?: boolean
   /** Avisa quando a resposta precisou vir de outro provedor. */
   onFallback?: (from: string, to: ProviderId) => void
 }
@@ -307,12 +309,26 @@ export { ContextOverflowError }
 
 /** Roda num provedor, trocando o modelo aposentado e repetindo em caso de sobrecarga. */
 async function runWithRecovery(provider: ProviderId, o: StreamOptions, hasText: () => boolean): Promise<void> {
-  const delays = [1200, 3000] // até 3 tentativas no total
+  // Perguntas ao vivo: até 3 tentativas rápidas. Segundo plano: espera o limite por minuto zerar.
+  const delays = o.patient ? [5000, 20_000, 60_000] : [1200, 3000]
   for (let attempt = 0; ; attempt++) {
+    // Se o provedor não mandar nem a primeira palavra em 90 s, a tentativa é dada como perdida
+    // (uma conexão pendurada não pode prender o resumo ou a resposta para sempre).
+    const silence = new AbortController()
+    let timer: NodeJS.Timeout | undefined = setTimeout(() => silence.abort(), provider === 'ollama' ? 300_000 : 90_000)
+    const attemptOpts: StreamOptions = {
+      ...o,
+      signal: AbortSignal.any([o.signal, silence.signal]),
+      onText: (d) => {
+        if (timer) clearTimeout(timer), (timer = undefined)
+        o.onText(d)
+      }
+    }
     try {
-      await runProvider(provider, o)
+      await runProvider(provider, attemptOpts)
       return
-    } catch (err) {
+    } catch (e) {
+      const err = silence.signal.aborted && !o.signal.aborted && !hasText() ? new TransientError(408, provider, 'sem resposta em 90 s') : e
       if (hasText() || o.signal.aborted) throw err
       // Modelo aposentado: troca pelo mais novo e tenta de novo.
       if (err instanceof ModelUnavailableError && (provider === 'gemini' || provider === 'groq')) {
@@ -330,6 +346,8 @@ async function runWithRecovery(provider: ProviderId, o: StreamOptions, hasText: 
         continue
       }
       throw err
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 }

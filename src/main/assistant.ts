@@ -93,6 +93,7 @@ async function summarizeWith(session: Session, budget: PromptBudget, h: RunHandl
       system,
       turns: [{ role: 'user', text: `# Transcrição completa\n${full}\n\n${SUMMARY_TASK}` }],
       signal: h.signal,
+      patient: true,
       maxTokens: 2000,
       onText: h.onText,
       onFallback: h.onFallback
@@ -106,6 +107,7 @@ async function summarizeWith(session: Session, budget: PromptBudget, h: RunHandl
       system,
       turns: [{ role: 'user', text: `# Trecho ${i + 1} de ${blocks.length}\n${block}\n\n${NOTES_TASK}` }],
       signal: h.signal,
+      patient: true,
       maxTokens: 900,
       onText: () => {}
     })
@@ -118,6 +120,7 @@ async function summarizeWith(session: Session, budget: PromptBudget, h: RunHandl
     system,
     turns: [{ role: 'user', text: `# Anotações de cada trecho da reunião, em ordem\n${material}\n\n${SUMMARY_TASK}` }],
     signal: h.signal,
+    patient: true,
     maxTokens: 2000,
     onText: h.onText,
     onFallback: h.onFallback
