@@ -72,6 +72,19 @@ const NOTES_TASK =
  * anota cada bloco e depois junta as anotações no resumo final. Assim nada do começo se perde.
  */
 async function summarizeWhole(session: Session, budget: PromptBudget, h: RunHandlers): Promise<string> {
+  try {
+    return await summarizeWith(session, budget, h)
+  } catch (e) {
+    // O provedor que respondeu (ex.: a reserva, quando o principal está sobrecarregado) pode aceitar
+    // pedidos bem menores: refaz em blocos pequenos, que cabem em qualquer um.
+    const msg = (e as Error).message ?? ''
+    if (h.signal.aborted || !/413|too large|context|token|demais|longo/i.test(msg) || budget.fullTranscriptChars <= 12_000) throw e
+    h.onNotice?.('Refazendo o resumo em blocos menores.')
+    return summarizeWith(session, { ...budget, fullTranscriptChars: 12_000 }, h)
+  }
+}
+
+async function summarizeWith(session: Session, budget: PromptBudget, h: RunHandlers): Promise<string> {
   const lines = transcriptLines(session)
   const system = buildSystem(session.modeId, 0)
   const full = lines.join('\n')

@@ -106,9 +106,14 @@ async function afterRecording(id: string): Promise<void> {
     const s = store.getSession(id)
     // Resumo automático da reunião inteira (só quando há conversa suficiente e ainda não há resumo).
     if (s && !s.summary && s.transcript.length >= 10) {
-      await runAsk({ requestId: randomUUID(), kind: 'summary', sessionId: id }, { signal: AbortSignal.timeout(600_000), onText: () => {} }).catch(
-        (e) => log.warn('[summary] resumo automático falhou:', (e as Error).message)
-      )
+      const summarize = () =>
+        runAsk({ requestId: randomUUID(), kind: 'summary', sessionId: id }, { signal: AbortSignal.timeout(600_000), onText: () => {} })
+      // Sobrecarga do provedor costuma passar em segundos: tenta de novo uma vez, 1 min depois.
+      await summarize().catch(async (e) => {
+        log.warn('[summary] resumo automático falhou; nova tentativa em 1 min:', (e as Error).message)
+        await new Promise((r) => setTimeout(r, 60_000))
+        await summarize().catch((e2) => log.warn('[summary] resumo automático falhou de novo:', (e2 as Error).message))
+      })
       broadcast('sessions:changed')
     }
   } catch (e) {
