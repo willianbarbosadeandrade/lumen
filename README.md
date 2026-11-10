@@ -2,7 +2,7 @@
 
 **Copiloto de IA para desktop.** É uma barra flutuante que fica sobre qualquer app: ouve a conversa, lê a tela quando você pede, sugere o que responder, age sobre o texto selecionado e guarda cada sessão com a transcrição revisada e um resumo.
 
-`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.3.5
+`Electron` · `React 19` · `TypeScript` · macOS · Windows · Linux · v0.3.6
 
 <!-- TODO: adicionar um GIF da barra em uso (docs/demo.gif) -->
 
@@ -82,8 +82,10 @@ npm run dev          # desenvolvimento com recarga automática
 npm run typecheck    # checagem de tipos (roda antes de todo build)
 npm run app          # macOS: build (.dmg em ~/Library/Caches/Lumen-build, fora do iCloud) e instala em /Applications
 npm run dist:win     # Windows: instalador NSIS
-npm run dist:linux   # Linux: AppImage + .deb
+npm run dist:linux   # Linux: AppImage + .deb, x64 e ARM64
 ```
+
+**No Ubuntu, instale pelo `.deb`** (`sudo apt install ./Lumen-<versão>-<arquitetura>.deb`). Ele instala a proteção do Chromium do jeito que o Ubuntu 24.04+ exige e já traz o `xdotool`/`wtype`. O AppImage não abre direto nesses sistemas: o Ubuntu bloqueia o sandbox do Chromium (é preciso abrir com `--no-sandbox`) e, no ARM64, o inicializador do AppImage ainda procura a `libz.so`, que não vem instalada.
 
 No macOS, o build cria uma única vez um certificado autoassinado "Lumen Dev" no Keychain. Assim as permissões de microfone, tela e acessibilidade não se perdem a cada rebuild.
 
@@ -99,10 +101,13 @@ No macOS, o build cria uma única vez um certificado autoassinado "Lumen Dev" no
 
 ## Estado atual e próximos passos
 
-Funcional no macOS (Apple Silicon). Os instaladores de Windows e Linux já são gerados, mas ainda precisam de teste em máquinas reais.
+Funcional no macOS (Apple Silicon). No Ubuntu 25.04 ARM64 (VM), o `.deb` instala e abre normalmente e a transcrição no computador funciona com identificação de quem falou; gravação com microfone ainda não foi testada lá. O Windows ainda precisa de teste em máquina real.
 
 - [ ] Testar o instalador e uma gravação completa em Windows 10/11
-- [ ] Testar AppImage e .deb em Ubuntu (X11 e Wayland)
+- [x] .deb em Ubuntu 25.04 ARM64 (Wayland): instala, abre e transcreve no computador
+- [ ] Atalhos globais no Ubuntu com Wayland (hoje só na sessão Xorg; no Wayland, usar a bandeja e a barra)
+- [ ] AppImage no Ubuntu 24.04+ (sandbox do Chromium e `libz.so` no ARM64)
+- [ ] Gravação com microfone no Linux
 - [x] Transcrição final no computador, com identificação de quem falou
 - [ ] Transcrição ao vivo também local, para um modo 100% offline
 - [ ] Ativar `sandbox: true` nas janelas do Electron
