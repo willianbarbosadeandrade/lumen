@@ -10,6 +10,9 @@ files:
   - package.json
   - resources/**
   - '!**/*.map'
+  # Builds antigos e instaladores nunca entram no pacote (o build do Mac sai fora de dist/).
+  - '!dist/**'
+  - '!releases/**'
 afterSign: build/adhoc-sign.cjs
 asarUnpack:
   - node_modules/electron-audio-loopback/**
@@ -67,7 +70,8 @@ nsis:
 
 # ---------- Linux: AppImage (roda direto) e .deb (Ubuntu/Debian) ----------
 linux:
-  files: ['!node_modules/sherpa-onnx-{darwin,win}-*/**']
+  # Só o módulo de transcrição da arquitetura do instalador (x64 ou arm64).
+  files: ['!node_modules/sherpa-onnx-{darwin,win}-*/**', '!node_modules/sherpa-onnx-linux-!(${arch})/**']
   target:
     - target: AppImage
       arch: [x64]

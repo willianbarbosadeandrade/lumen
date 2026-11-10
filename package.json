@@ -1,7 +1,7 @@
 {
   "name": "lumen",
   "productName": "Lumen",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Copiloto de IA para desktop (macOS, Windows e Linux): escuta a conversa, entende a tela e age sobre o texto selecionado.",
   "main": "./out/main/index.js",
   "author": {
@@ -23,7 +23,7 @@
     "setup:cert": "bash build/create-cert.sh",
     "reset:perms": "tccutil reset ScreenCapture com.willian.lumen; tccutil reset Accessibility com.willian.lumen; tccutil reset Microphone com.willian.lumen; tccutil reset AppleEvents com.willian.lumen; true",
     "dist:win": "npm i --no-save --force sherpa-onnx-win-x64@2.0.1 && npm run typecheck && electron-vite build && electron-builder --win --x64",
-    "dist:linux": "npm i --no-save --force sherpa-onnx-linux-x64@2.0.1 && npm run typecheck && electron-vite build && electron-builder --linux --x64"
+    "dist:linux": "npm i --no-save --force sherpa-onnx-linux-x64@2.0.1 sherpa-onnx-linux-arm64@2.0.1 && npm run typecheck && electron-vite build && electron-builder --linux --x64 --arm64"
   },
   "dependencies": {
     "electron-audio-loopback": "1.0.6",
