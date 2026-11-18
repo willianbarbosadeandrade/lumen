@@ -119,4 +119,4 @@ Avise as pessoas antes de gravar uma conversa. Em muitos lugares, gravar sem con
 
 ---
 
-Desenvolvido por **Willian Barbosa** · [LinkedIn](https://www.linkedin.com/in/willianbarbosadeandrade)
+Desenvolvido por **Willian Barbosa** · [LinkedIn](https://www.linkedin.com/in/willian-barbosa-de-andrade-31a068226)
